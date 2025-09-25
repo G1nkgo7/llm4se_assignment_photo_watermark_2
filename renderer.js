@@ -2,6 +2,7 @@ let importedFiles = [];
 let currentImageIndex = 0;
 let outputDir = '';
 let watermarkImagePath = null;
+let thumbnailCache = {}; 
 
 // DOM元素
 const importBtn = document.getElementById('import-btn');
@@ -158,26 +159,43 @@ window.addEventListener('drop', handleDrop);
 // ----------------------
 function renderImageThumbnails() {
   imageThumbnails.innerHTML = '';
-  importedFiles.forEach((file, index) => {
+  importedFiles.forEach(async (file, index) => { 
+    
+    // 【核心改动 1】：检查缓存
+    let dataUrl = thumbnailCache[file]; 
+
+    if (!dataUrl) {
+      // 缓存中没有，才调用 IPC 异步获取
+      dataUrl = await window.ipcRenderer.getPreviewDataUrl(file);
+      if (dataUrl) {
+        // 【核心改动 2】：存入缓存
+        thumbnailCache[file] = dataUrl; 
+      }
+    }
+    
     const div = document.createElement('div');
     div.className = 'thumbnail' + (index === currentImageIndex ? ' active' : '');
+    
+    // 如果获取失败，设置一个透明像素占位符
+    const imgSrc = dataUrl || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
     div.innerHTML = `
-      <img src="${file}" />
+      <img src="${imgSrc}" />
       <div class="filename">${file.split(/[/\\]/).pop()}</div>
     `;
     div.addEventListener('click', () => {
-      // 调用同一个 scope 内的 selectImage 函数
       selectImage(index);
     });
     imageThumbnails.appendChild(div);
   });
 }
 
+
 // ----------------------
 // Canvas水印实时预览 & 图片切换 (从 index.html 移动过来)
 // ----------------------
 
-function drawPreview() {
+async function drawPreview() {
   if (!importedFiles[currentImageIndex]) {
     // 如果没有图片，则显示提示
     noPreview.style.display = 'block';
@@ -186,8 +204,20 @@ function drawPreview() {
     noPreview.style.display = 'none';
   }
   
+  // 核心修改：异步获取图片的 Base64 数据 URL
+  const file = importedFiles[currentImageIndex];
+  // 假设 window.ipcRenderer.getPreviewDataUrl 负责将图片（包括tiff）转换为 Base64/DataURL
+  const dataUrl = await window.ipcRenderer.getPreviewDataUrl(file); 
+
+  if (!dataUrl) {
+    console.error('无法加载或转换图片:', file);
+    noPreview.style.display = 'block'; // 加载失败也显示无预览
+    return;
+  }
+  
   const img = new Image();
-  img.src = importedFiles[currentImageIndex];
+  img.src = dataUrl; // 使用 Base64 数据 URL 作为源
+  
   img.onload = () => {
     // 调整 Canvas 尺寸以匹配图片
     previewCanvas.width = img.width;
@@ -222,8 +252,8 @@ function drawPreview() {
 function selectImage(index) {
   if (index < 0 || index >= importedFiles.length) return;
   currentImageIndex = index;
-  drawPreview();
   renderImageThumbnails();
+  drawPreview();
 }
 
 

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const sharp = require('sharp'); // 确保已安装
 
 let templates = {}; // 模板存储
 
@@ -17,6 +18,35 @@ function createWindow() {
 
   win.loadFile('index.html');
 }
+
+
+ipcMain.handle('get-preview-data-url', async (event, filePath) => {
+  // 检查是否为Tiff，如果不是，可以直接返回原始路径或进行简单读取
+  if (!filePath.toLowerCase().endsWith('.tiff') && !filePath.toLowerCase().endsWith('.tif')) {
+    // 对于原生支持的图片，可以直接返回数据URL
+    try {
+        const data = fs.readFileSync(filePath).toString('base64');
+        const mimeType = path.extname(filePath).toLowerCase() === '.png' ? 'image/png' : 'image/jpeg'; // 简化处理
+        return `data:${mimeType};base64,${data}`;
+    } catch (e) {
+        console.error('读取原生图片失败:', e);
+        return null;
+    }
+  }
+
+  // Tiff 转换
+  try {
+    const buffer = await sharp(filePath)
+      .resize(800) // 可选：限制预览尺寸以优化性能
+      .png() // 转换为 PNG 格式
+      .toBuffer();
+    const base64 = buffer.toString('base64');
+    return `data:image/png;base64,${base64}`;
+  } catch (err) {
+    console.error('Tiff 转换失败:', err);
+    return null;
+  }
+});
 
 // ----------------------
 // 图片选择
