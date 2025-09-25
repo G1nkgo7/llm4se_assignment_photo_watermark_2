@@ -9,8 +9,12 @@ const importFolderBtn = document.getElementById('import-folder-btn');
 const exportBtn = document.getElementById('export-btn');
 const imageThumbnails = document.getElementById('image-thumbnails');
 const previewContainer = document.getElementById('preview-container');
-const previewImage = document.getElementById('preview-image');
+
+// Canvas 相关的 DOM 元素和上下文 (从 index.html 移动过来)
+const previewCanvas = document.getElementById('preview-canvas');
 const noPreview = document.getElementById('no-preview');
+const ctx = previewCanvas.getContext('2d'); // 获取 Canvas 上下文
+
 const watermarkText = document.getElementById('watermark-text');
 const watermarkOpacity = document.getElementById('watermark-opacity');
 const opacityValue = document.getElementById('opacity-value');
@@ -32,9 +36,10 @@ const saveTemplateBtn = document.getElementById('save-template-btn');
 const templateNameInput = document.getElementById('template-name');
 const templatesList = document.getElementById('templates-list');
 
-// 水印位置
+// 水印位置和拖拽状态 (从 index.html 移动过来)
 let watermarkPos = { x: 50, y: 50 };
 let isDragging = false;
+
 
 // ----------------------
 // 点击导入图片
@@ -45,7 +50,7 @@ importBtn.addEventListener('click', async () => {
     importedFiles.push(...files);
     currentImageIndex = importedFiles.length - files.length;
     renderImageThumbnails();
-    drawPreview();
+    drawPreview(); // 直接调用
   }
 });
 
@@ -62,7 +67,7 @@ importFolderBtn.addEventListener('click', async () => {
     importedFiles.push(...files);
     currentImageIndex = importedFiles.length - files.length;
     renderImageThumbnails();
-    try { drawPreview(); } catch (err) { console.error('drawPreview 出错:', err); }
+    try { drawPreview(); } catch (error) { console.error('drawPreview 出错:', error); } // 直接调用
   } catch (error) {
     console.error('导入文件夹时出错:', error);
     alert('导入文件夹失败，请重试');
@@ -125,7 +130,7 @@ async function handleDrop(e) {
   importedFiles.push(...imageFiles);
   currentImageIndex = importedFiles.length - imageFiles.length;
   renderImageThumbnails();
-  drawPreview();
+  drawPreview(); // 直接调用
 }
 
 // 监听整个窗口拖拽
@@ -161,119 +166,103 @@ function renderImageThumbnails() {
       <div class="filename">${file.split(/[/\\]/).pop()}</div>
     `;
     div.addEventListener('click', () => {
-      currentImageIndex = index;
-      drawPreview();
-      renderImageThumbnails();
+      // 调用同一个 scope 内的 selectImage 函数
+      selectImage(index);
     });
     imageThumbnails.appendChild(div);
   });
 }
 
 // ----------------------
-// Canvas实时预览
+// Canvas水印实时预览 & 图片切换 (从 index.html 移动过来)
 // ----------------------
+
 function drawPreview() {
   if (!importedFiles[currentImageIndex]) {
-    previewImage.style.display = 'none';
+    // 如果没有图片，则显示提示
     noPreview.style.display = 'block';
     return;
+  } else {
+    noPreview.style.display = 'none';
   }
-
-  previewImage.style.display = 'block';
-  noPreview.style.display = 'none';
-
+  
   const img = new Image();
   img.src = importedFiles[currentImageIndex];
-
   img.onload = () => {
-    try {
-      const tempCanvas = document.createElement('canvas');
-      const ctx = tempCanvas.getContext('2d');
-      tempCanvas.width = img.width;
-      tempCanvas.height = img.height;
-      ctx.drawImage(img, 0, 0);
+    // 调整 Canvas 尺寸以匹配图片
+    previewCanvas.width = img.width;
+    previewCanvas.height = img.height;
+    ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+    ctx.drawImage(img, 0, 0);
 
-      const wmType = document.querySelector('input[name="watermark-type"]:checked').value;
-      if (wmType === 'text' && watermarkText.value) {
-        ctx.globalAlpha = watermarkOpacity.value / 100;
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '40px sans-serif';
-        ctx.fillText(watermarkText.value, watermarkPos.x, watermarkPos.y);
+    const wmType = document.querySelector('input[name="watermark-type"]:checked').value;
+    if (wmType === 'text' && watermarkText.value) {
+      // 文本水印
+      ctx.globalAlpha = watermarkOpacity.value / 100;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '40px sans-serif';
+      ctx.fillText(watermarkText.value, watermarkPos.x, watermarkPos.y);
+      ctx.globalAlpha = 1.0;
+    } else if (wmType === 'image' && watermarkImagePath) {
+      // 图片水印
+      const wmImg = new Image();
+      wmImg.src = watermarkImagePath;
+      wmImg.onload = () => {
+        const scale = watermarkSize.value / 100;
+        const w = wmImg.width * scale;
+        const h = wmImg.height * scale;
+        ctx.globalAlpha = watermarkImageOpacity.value / 100;
+        ctx.drawImage(wmImg, watermarkPos.x, watermarkPos.y, w, h);
         ctx.globalAlpha = 1.0;
-      } else if (wmType === 'image' && watermarkImagePath) {
-        const wmImg = new Image();
-        wmImg.src = watermarkImagePath;
-        wmImg.onload = () => {
-          const scale = watermarkSize.value / 100;
-          const w = wmImg.width * scale;
-          const h = wmImg.height * scale;
-          ctx.globalAlpha = watermarkImageOpacity.value / 100;
-          ctx.drawImage(wmImg, watermarkPos.x, watermarkPos.y, w, h);
-          ctx.globalAlpha = 1.0;
-          previewImage.src = tempCanvas.toDataURL('image/png');
-        };
-        wmImg.onerror = () => console.warn('水印图片加载失败:', watermarkImagePath);
-        return;
-      }
-
-      previewImage.src = tempCanvas.toDataURL('image/png');
-    } catch (err) {
-      console.error('drawPreview 内部异常:', err);
+      };
     }
-  };
-
-  img.onerror = () => {
-    console.error('图片加载失败:', importedFiles[currentImageIndex]);
   };
 }
 
+function selectImage(index) {
+  if (index < 0 || index >= importedFiles.length) return;
+  currentImageIndex = index;
+  drawPreview();
+  renderImageThumbnails();
+}
+
+
 // ----------------------
-// 水印拖拽
+// 绑定输入变化刷新 (从 index.html 移动过来)
 // ----------------------
-previewImage.addEventListener('mousedown', e => {
-  const rect = previewImage.getBoundingClientRect();
+[watermarkText, watermarkOpacity, watermarkSize, watermarkImageOpacity].forEach(el => {
+  el.addEventListener('input', drawPreview);
+});
+
+// ----------------------
+// 水印拖拽 (从 index.html 移动过来)
+// ----------------------
+previewCanvas.addEventListener('mousedown', e => {
+  const rect = previewCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
+  // 简单判断点击范围（可优化）
   if (Math.abs(x - watermarkPos.x) < 100 && Math.abs(y - watermarkPos.y) < 50) {
     isDragging = true;
   }
 });
 
-previewImage.addEventListener('mousemove', e => {
+previewCanvas.addEventListener('mousemove', e => {
   if (!isDragging) return;
-  const rect = previewImage.getBoundingClientRect();
+  const rect = previewCanvas.getBoundingClientRect();
   watermarkPos.x = e.clientX - rect.left;
   watermarkPos.y = e.clientY - rect.top;
   drawPreview();
 });
 
-previewImage.addEventListener('mouseup', e => { isDragging = false; });
-previewImage.addEventListener('mouseleave', e => { isDragging = false; });
-
-// ----------------------
-// 水印控件绑定
-// ----------------------
-[watermarkText, watermarkOpacity, watermarkSize, watermarkImageOpacity].forEach(el => {
-  el.addEventListener('input', () => {
-    if (el === watermarkOpacity) opacityValue.textContent = el.value;
-    if (el === watermarkSize) sizeValue.textContent = el.value;
-    if (el === watermarkImageOpacity) imageOpacityValue.textContent = el.value;
-    drawPreview();
-  });
+previewCanvas.addEventListener('mouseup', e => {
+  isDragging = false;
 });
 
-watermarkTypeRadios.forEach(radio => {
-  radio.addEventListener('change', () => {
-    if (radio.value === 'text') {
-      textSettings.style.display = 'block';
-      imageSettings.style.display = 'none';
-    } else {
-      textSettings.style.display = 'none';
-      imageSettings.style.display = 'block';
-    }
-    drawPreview();
-  });
+previewCanvas.addEventListener('mouseleave', e => {
+  isDragging = false;
 });
+
 
 // ----------------------
 // 选择水印图片
@@ -306,6 +295,8 @@ exportBtn.addEventListener('click', async () => {
     alert('请导入图片并选择输出目录！');
     return;
   }
+
+  // ... (导出逻辑保持不变)
 
   for (let i = 0; i < importedFiles.length; i++) {
     const img = new Image();
