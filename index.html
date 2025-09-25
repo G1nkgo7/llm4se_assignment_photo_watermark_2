@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Photo Watermark 2</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Photo Watermark 2</h1>
+      <div class="header-buttons">
+        <button id="import-btn" class="btn-primary">导入图片</button>
+        <button id="export-btn" class="btn-primary">导出图片</button>
+      </div>
+    </header>
+
+    <main>
+      <div class="sidebar">
+        <div class="image-list">
+          <h3>已导入图片</h3>
+          <div id="image-thumbnails" class="thumbnails"></div>
+        </div>
+      </div>
+
+      <div class="preview-section">
+        <div id="preview-container" class="preview-container">
+          <div id="no-preview" class="no-preview">
+            <p>请导入图片以预览</p>
+          </div>
+          <img id="preview-image" class="preview-image" style="display: none;">
+        </div>
+      </div>
+
+      <div class="watermark-settings">
+        <h3>水印设置</h3>
+        
+        <div class="setting-group">
+          <label>水印类型</label>
+          <div class="radio-group">
+            <label><input type="radio" name="watermark-type" value="text" checked> 文本水印</label>
+            <label><input type="radio" name="watermark-type" value="image"> 图片水印</label>
+          </div>
+        </div>
+
+        <div id="text-settings" class="setting-group">
+          <label for="watermark-text">水印文本</label>
+          <input type="text" id="watermark-text" placeholder="请输入水印文本">
+          
+          <label for="watermark-opacity">透明度 (0-100)</label>
+          <input type="range" id="watermark-opacity" min="0" max="100" value="50">
+          <span id="opacity-value">50</span>
+        </div>
+
+        <div id="image-settings" class="setting-group" style="display: none;">
+          <button id="select-watermark-btn" class="btn-secondary">选择水印图片</button>
+          <p id="watermark-image-path" class="file-path"></p>
+          
+          <label for="watermark-size">水印大小 (%)</label>
+          <input type="range" id="watermark-size" min="1" max="100" value="20">
+          <span id="size-value">20</span>
+          
+          <label for="watermark-image-opacity">透明度 (0-100)</label>
+          <input type="range" id="watermark-image-opacity" min="0" max="100" value="50">
+          <span id="image-opacity-value">50</span>
+        </div>
+
+        <h3>导出设置</h3>
+        
+        <div class="setting-group">
+          <button id="select-output-btn" class="btn-secondary">选择输出目录</button>
+          <p id="output-dir" class="file-path"></p>
+          
+          <label for="output-format">输出格式</label>
+          <select id="output-format">
+            <option value=".jpg">JPEG</option>
+            <option value=".png">PNG</option>
+          </select>
+          
+          <label for="file-prefix">文件前缀</label>
+          <input type="text" id="file-prefix" placeholder="可选">
+          
+          <label for="file-suffix">文件后缀</label>
+          <input type="text" id="file-suffix" placeholder="可选">
+        </div>
+
+        <h3>模板管理</h3>
+        
+        <div class="setting-group">
+          <div class="template-controls">
+            <input type="text" id="template-name" placeholder="模板名称">
+            <button id="save-template-btn" class="btn-secondary">保存模板</button>
+          </div>
+          
+          <div id="templates-list" class="templates-list">
+            <p>无保存的模板</p>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

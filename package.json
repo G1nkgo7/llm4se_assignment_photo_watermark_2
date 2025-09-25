@@ -1,0 +1,19 @@
+{
+  "name": "photo-watermark-2",
+  "version": "1.0.0",
+  "description": "图片水印工具，支持批量添加文本和图片水印",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-packager . PhotoWatermark2 --platform=win32 --arch=x64 --out=dist --overwrite"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "electron": "^30.0.0",
+    "sharp": "^0.33.0"
+  },
+  "devDependencies": {
+    "electron-packager": "^17.1.2"
+  }
+}
