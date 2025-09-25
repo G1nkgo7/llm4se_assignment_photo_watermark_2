@@ -1,307 +1,423 @@
-// 全局变量
 let importedFiles = [];
-let currentImageIndex = -1;
+let currentImageIndex = 0;
+let outputDir = '';
 let watermarkImagePath = null;
-let outputDir = null;
 
 // DOM元素
 const importBtn = document.getElementById('import-btn');
+const importFolderBtn = document.getElementById('import-folder-btn');
 const exportBtn = document.getElementById('export-btn');
 const imageThumbnails = document.getElementById('image-thumbnails');
+const previewContainer = document.getElementById('preview-container');
 const previewImage = document.getElementById('preview-image');
 const noPreview = document.getElementById('no-preview');
-const watermarkTypeRadios = document.querySelectorAll('input[name="watermark-type"]');
-const textSettings = document.getElementById('text-settings');
-const imageSettings = document.getElementById('image-settings');
 const watermarkText = document.getElementById('watermark-text');
 const watermarkOpacity = document.getElementById('watermark-opacity');
 const opacityValue = document.getElementById('opacity-value');
-const selectWatermarkBtn = document.getElementById('select-watermark-btn');
-const watermarkImagePathEl = document.getElementById('watermark-image-path');
 const watermarkSize = document.getElementById('watermark-size');
 const sizeValue = document.getElementById('size-value');
 const watermarkImageOpacity = document.getElementById('watermark-image-opacity');
 const imageOpacityValue = document.getElementById('image-opacity-value');
+const watermarkTypeRadios = document.querySelectorAll('input[name="watermark-type"]');
+const textSettings = document.getElementById('text-settings');
+const imageSettings = document.getElementById('image-settings');
+const selectWatermarkBtn = document.getElementById('select-watermark-btn');
+const watermarkImagePathEl = document.getElementById('watermark-image-path');
 const selectOutputBtn = document.getElementById('select-output-btn');
 const outputDirEl = document.getElementById('output-dir');
 const outputFormat = document.getElementById('output-format');
 const filePrefix = document.getElementById('file-prefix');
 const fileSuffix = document.getElementById('file-suffix');
-const templateName = document.getElementById('template-name');
 const saveTemplateBtn = document.getElementById('save-template-btn');
+const templateNameInput = document.getElementById('template-name');
 const templatesList = document.getElementById('templates-list');
 
-// 事件监听器
-importBtn.addEventListener('click', importFiles);
-exportBtn.addEventListener('click', exportImages);
+// 水印位置
+let watermarkPos = { x: 50, y: 50 };
+let isDragging = false;
 
-watermarkTypeRadios.forEach(radio => {
-  radio.addEventListener('change', toggleWatermarkSettings);
+// ----------------------
+// 点击导入图片
+// ----------------------
+importBtn.addEventListener('click', async () => {
+  const files = await window.ipcRenderer.importFiles();
+  if (files && files.length) {
+    importedFiles.push(...files);
+    currentImageIndex = importedFiles.length - files.length;
+    renderImageThumbnails();
+    drawPreview();
+  }
 });
 
-watermarkOpacity.addEventListener('input', updateOpacityValue);
-watermarkSize.addEventListener('input', updateSizeValue);
-watermarkImageOpacity.addEventListener('input', updateImageOpacityValue);
-
-selectWatermarkBtn.addEventListener('click', selectWatermarkImage);
-selectOutputBtn.addEventListener('click', selectOutputDirectory);
-
-saveTemplateBtn.addEventListener('click', saveTemplate);
-
-// 加载模板列表
-loadTemplatesList();
-
-// 初始化时更新透明度显示
-updateOpacityValue();
-updateSizeValue();
-updateImageOpacityValue();
-
-// 函数定义
-async function importFiles() {
+// 批量导入文件夹
+importFolderBtn.addEventListener('click', async () => {
   try {
-    const files = await window.electron.importFiles();
-    if (files.length > 0) {
-      importedFiles = files;
-      renderImageThumbnails();
-      if (importedFiles.length > 0) {
-        selectImage(0);
+    const files = await window.ipcRenderer.selectFolder();
+    if (files === null) return;
+    if (!Array.isArray(files)) throw new Error('返回值不是数组');
+    if (files.length === 0) {
+      alert('所选文件夹中未找到图片文件');
+      return;
+    }
+    importedFiles.push(...files);
+    currentImageIndex = importedFiles.length - files.length;
+    renderImageThumbnails();
+    try { drawPreview(); } catch (err) { console.error('drawPreview 出错:', err); }
+  } catch (error) {
+    console.error('导入文件夹时出错:', error);
+    alert('导入文件夹失败，请重试');
+  }
+});
+
+// ----------------------
+// 拖拽导入（整个窗口悬浮）
+// ----------------------
+let isDragOverWindow = false;
+
+async function handleDrop(e) {
+  e.preventDefault();
+  previewContainer.classList.remove('drag-over');
+  isDragOverWindow = false;
+
+  const items = e.dataTransfer.items;
+  if (!items) return;
+
+  const imageFiles = [];
+
+  async function traverseFileTree(entry) {
+    return new Promise(resolve => {
+      if (entry.isFile) {
+        entry.file(file => {
+          if (/\.(jpg|jpeg|png|bmp|tiff)$/i.test(file.name)) {
+            imageFiles.push(file.path);
+          }
+          resolve();
+        });
+      } else if (entry.isDirectory) {
+        const dirReader = entry.createReader();
+        dirReader.readEntries(async entries => {
+          for (const e of entries) {
+            await traverseFileTree(e);
+          }
+          resolve();
+        });
+      }
+    });
+  }
+
+  const promises = [];
+  for (const item of items) {
+    const entry = item.webkitGetAsEntry?.();
+    if (entry) {
+      promises.push(traverseFileTree(entry));
+    } else if (item.kind === 'file') {
+      const file = item.getAsFile();
+      if (file && /\.(jpg|jpeg|png|bmp|tiff)$/i.test(file.name)) {
+        imageFiles.push(file.path);
       }
     }
-  } catch (error) {
-    console.error('导入文件失败:', error);
   }
+
+  await Promise.all(promises);
+
+  if (!imageFiles.length) return;
+
+  importedFiles.push(...imageFiles);
+  currentImageIndex = importedFiles.length - imageFiles.length;
+  renderImageThumbnails();
+  drawPreview();
 }
 
+// 监听整个窗口拖拽
+window.addEventListener('dragover', e => {
+  e.preventDefault();
+  if (!isDragOverWindow) {
+    previewContainer.classList.add('drag-over');
+    isDragOverWindow = true;
+  }
+});
+
+window.addEventListener('dragleave', e => {
+  e.preventDefault();
+  // 仅当鼠标离开窗口边界才取消高亮
+  if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+    previewContainer.classList.remove('drag-over');
+    isDragOverWindow = false;
+  }
+});
+
+window.addEventListener('drop', handleDrop);
+
+// ----------------------
+// 渲染缩略图
+// ----------------------
 function renderImageThumbnails() {
   imageThumbnails.innerHTML = '';
   importedFiles.forEach((file, index) => {
-    const thumbnail = document.createElement('div');
-    thumbnail.className = `thumbnail ${index === currentImageIndex ? 'active' : ''}`;
-    thumbnail.dataset.index = index;
-    
-    const img = document.createElement('img');
-    img.src = file;
-    img.alt = file;
-    
-    const filename = document.createElement('div');
-    filename.className = 'filename';
-    filename.textContent = getFileName(file);
-    
-    thumbnail.appendChild(img);
-    thumbnail.appendChild(filename);
-    
-    thumbnail.addEventListener('click', () => {
-      selectImage(index);
+    const div = document.createElement('div');
+    div.className = 'thumbnail' + (index === currentImageIndex ? ' active' : '');
+    div.innerHTML = `
+      <img src="${file}" />
+      <div class="filename">${file.split(/[/\\]/).pop()}</div>
+    `;
+    div.addEventListener('click', () => {
+      currentImageIndex = index;
+      drawPreview();
+      renderImageThumbnails();
     });
-    
-    imageThumbnails.appendChild(thumbnail);
+    imageThumbnails.appendChild(div);
   });
 }
 
-function selectImage(index) {
-  if (index >= 0 && index < importedFiles.length) {
-    currentImageIndex = index;
-    previewImage.src = importedFiles[index];
-    previewImage.style.display = 'block';
-    noPreview.style.display = 'none';
-    renderImageThumbnails(); // 更新缩略图选中状态
-  }
-}
-
-function toggleWatermarkSettings() {
-  const selectedType = document.querySelector('input[name="watermark-type"]:checked').value;
-  textSettings.style.display = selectedType === 'text' ? 'block' : 'none';
-  imageSettings.style.display = selectedType === 'image' ? 'block' : 'none';
-}
-
-function updateOpacityValue() {
-  opacityValue.textContent = watermarkOpacity.value;
-}
-
-function updateSizeValue() {
-  sizeValue.textContent = watermarkSize.value;
-}
-
-function updateImageOpacityValue() {
-  imageOpacityValue.textContent = watermarkImageOpacity.value;
-}
-
-async function selectWatermarkImage() {
-  try {
-    const path = await window.electron.selectWatermarkImage();
-    if (path) {
-      watermarkImagePath = path;
-      watermarkImagePathEl.textContent = getFileName(path);
-    }
-  } catch (error) {
-    console.error('选择水印图片失败:', error);
-  }
-}
-
-async function selectOutputDirectory() {
-  try {
-    const dir = await window.electron.selectOutputDir();
-    if (dir) {
-      outputDir = dir;
-      outputDirEl.textContent = dir;
-    }
-  } catch (error) {
-    console.error('选择输出目录失败:', error);
-  }
-}
-
-async function exportImages() {
-  if (importedFiles.length === 0) {
-    alert('请先导入图片');
+// ----------------------
+// Canvas实时预览
+// ----------------------
+function drawPreview() {
+  if (!importedFiles[currentImageIndex]) {
+    previewImage.style.display = 'none';
+    noPreview.style.display = 'block';
     return;
   }
-  
-  if (!outputDir) {
-    const dir = await window.electron.selectOutputDir();
-    if (!dir) return;
+
+  previewImage.style.display = 'block';
+  noPreview.style.display = 'none';
+
+  const img = new Image();
+  img.src = importedFiles[currentImageIndex];
+
+  img.onload = () => {
+    try {
+      const tempCanvas = document.createElement('canvas');
+      const ctx = tempCanvas.getContext('2d');
+      tempCanvas.width = img.width;
+      tempCanvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      const wmType = document.querySelector('input[name="watermark-type"]:checked').value;
+      if (wmType === 'text' && watermarkText.value) {
+        ctx.globalAlpha = watermarkOpacity.value / 100;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '40px sans-serif';
+        ctx.fillText(watermarkText.value, watermarkPos.x, watermarkPos.y);
+        ctx.globalAlpha = 1.0;
+      } else if (wmType === 'image' && watermarkImagePath) {
+        const wmImg = new Image();
+        wmImg.src = watermarkImagePath;
+        wmImg.onload = () => {
+          const scale = watermarkSize.value / 100;
+          const w = wmImg.width * scale;
+          const h = wmImg.height * scale;
+          ctx.globalAlpha = watermarkImageOpacity.value / 100;
+          ctx.drawImage(wmImg, watermarkPos.x, watermarkPos.y, w, h);
+          ctx.globalAlpha = 1.0;
+          previewImage.src = tempCanvas.toDataURL('image/png');
+        };
+        wmImg.onerror = () => console.warn('水印图片加载失败:', watermarkImagePath);
+        return;
+      }
+
+      previewImage.src = tempCanvas.toDataURL('image/png');
+    } catch (err) {
+      console.error('drawPreview 内部异常:', err);
+    }
+  };
+
+  img.onerror = () => {
+    console.error('图片加载失败:', importedFiles[currentImageIndex]);
+  };
+}
+
+// ----------------------
+// 水印拖拽
+// ----------------------
+previewImage.addEventListener('mousedown', e => {
+  const rect = previewImage.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  if (Math.abs(x - watermarkPos.x) < 100 && Math.abs(y - watermarkPos.y) < 50) {
+    isDragging = true;
+  }
+});
+
+previewImage.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  const rect = previewImage.getBoundingClientRect();
+  watermarkPos.x = e.clientX - rect.left;
+  watermarkPos.y = e.clientY - rect.top;
+  drawPreview();
+});
+
+previewImage.addEventListener('mouseup', e => { isDragging = false; });
+previewImage.addEventListener('mouseleave', e => { isDragging = false; });
+
+// ----------------------
+// 水印控件绑定
+// ----------------------
+[watermarkText, watermarkOpacity, watermarkSize, watermarkImageOpacity].forEach(el => {
+  el.addEventListener('input', () => {
+    if (el === watermarkOpacity) opacityValue.textContent = el.value;
+    if (el === watermarkSize) sizeValue.textContent = el.value;
+    if (el === watermarkImageOpacity) imageOpacityValue.textContent = el.value;
+    drawPreview();
+  });
+});
+
+watermarkTypeRadios.forEach(radio => {
+  radio.addEventListener('change', () => {
+    if (radio.value === 'text') {
+      textSettings.style.display = 'block';
+      imageSettings.style.display = 'none';
+    } else {
+      textSettings.style.display = 'none';
+      imageSettings.style.display = 'block';
+    }
+    drawPreview();
+  });
+});
+
+// ----------------------
+// 选择水印图片
+// ----------------------
+selectWatermarkBtn.addEventListener('click', async () => {
+  const file = await window.ipcRenderer.selectWatermarkImage();
+  if (file) {
+    watermarkImagePath = file;
+    watermarkImagePathEl.textContent = file;
+    drawPreview();
+  }
+});
+
+// ----------------------
+// 选择输出目录
+// ----------------------
+selectOutputBtn.addEventListener('click', async () => {
+  const dir = await window.ipcRenderer.selectOutputDir();
+  if (dir) {
     outputDir = dir;
     outputDirEl.textContent = dir;
   }
-  
-  const watermarkConfig = {
-    type: document.querySelector('input[name="watermark-type"]:checked').value,
-    text: watermarkText.value,
-    opacity: parseInt(watermarkOpacity.value),
-    imagePath: watermarkImagePath,
-    size: parseInt(watermarkSize.value),
-    imageOpacity: parseInt(watermarkImageOpacity.value)
-  };
-  
-  const namingConfig = {
-    prefix: filePrefix.value,
-    suffix: fileSuffix.value,
-    format: outputFormat.value
-  };
-  
-  try {
-    const results = await window.electron.exportImages({
-      files: importedFiles,
-      outputDir,
-      watermarkConfig,
-      namingConfig
-    });
-    
-    const successCount = results.filter(r => r.success).length;
-    alert(`导出完成！成功导出 ${successCount}/${results.length} 张图片`);
-  } catch (error) {
-    console.error('导出图片失败:', error);
-    alert('导出图片失败，请重试');
-  }
-}
+});
 
-function saveTemplate() {
-  const name = templateName.value.trim();
-  if (!name) {
-    alert('请输入模板名称');
+// ----------------------
+// 导出图片
+// ----------------------
+exportBtn.addEventListener('click', async () => {
+  if (!importedFiles.length || !outputDir) {
+    alert('请导入图片并选择输出目录！');
     return;
   }
-  
-  const templateData = {
-    name,
-    watermarkConfig: {
-      type: document.querySelector('input[name="watermark-type"]:checked').value,
-      text: watermarkText.value,
-      opacity: parseInt(watermarkOpacity.value),
-      size: parseInt(watermarkSize.value),
-      imageOpacity: parseInt(watermarkImageOpacity.value)
-    },
-    exportConfig: {
-      format: outputFormat.value,
-      prefix: filePrefix.value,
-      suffix: fileSuffix.value
-    }
-  };
-  
-  window.electron.saveTemplate(templateData);
-  templateName.value = '';
-  loadTemplatesList();
+
+  for (let i = 0; i < importedFiles.length; i++) {
+    const img = new Image();
+    img.src = importedFiles[i];
+    await new Promise(resolve => {
+      img.onload = () => {
+        const tempCanvas = document.createElement('canvas');
+        const tctx = tempCanvas.getContext('2d');
+        tempCanvas.width = img.width;
+        tempCanvas.height = img.height;
+        tctx.drawImage(img, 0, 0);
+
+        const wmType = document.querySelector('input[name="watermark-type"]:checked').value;
+        if (wmType === 'text' && watermarkText.value) {
+          tctx.globalAlpha = watermarkOpacity.value / 100;
+          tctx.fillStyle = '#ffffff';
+          tctx.font = '40px sans-serif';
+          tctx.fillText(watermarkText.value, watermarkPos.x, watermarkPos.y);
+          tctx.globalAlpha = 1.0;
+        } else if (wmType === 'image' && watermarkImagePath) {
+          const wmImg = new Image();
+          wmImg.src = watermarkImagePath;
+          wmImg.onload = () => {
+            const scale = watermarkSize.value / 100;
+            const w = wmImg.width * scale;
+            const h = wmImg.height * scale;
+            tctx.globalAlpha = watermarkImageOpacity.value / 100;
+            tctx.drawImage(wmImg, watermarkPos.x, watermarkPos.y, w, h);
+            tctx.globalAlpha = 1.0;
+            saveImage(tempCanvas, importedFiles[i]);
+            resolve();
+          };
+          return;
+        }
+        saveImage(tempCanvas, importedFiles[i]);
+        resolve();
+      };
+    });
+  }
+
+  alert('导出完成！');
+});
+
+function saveImage(canvasEl, originalPath) {
+  const format = outputFormat.value || '.png';
+  const prefix = filePrefix.value || '';
+  const suffix = fileSuffix.value || '';
+  const filename = originalPath.split(/[/\\]/).pop();
+  const baseName = filename.replace(/\.[^/.]+$/, '');
+  const outName = `${prefix}${baseName}${suffix}${format}`;
+  const dataURL = canvasEl.toDataURL('image/png');
+  window.ipcRenderer.saveImage(dataURL, `${outputDir}/${outName}`);
 }
 
-async function loadTemplatesList() {
-  try {
-    const templates = await window.electron.loadTemplates();
-    
-    if (templates.length === 0) {
+// ----------------------
+// 模板管理
+// ----------------------
+saveTemplateBtn.addEventListener('click', () => {
+  const name = templateNameInput.value.trim();
+  if (!name) return alert('请输入模板名称');
+  const template = {
+    type: document.querySelector('input[name="watermark-type"]:checked').value,
+    text: watermarkText.value,
+    opacity: watermarkOpacity.value,
+    imgPath: watermarkImagePath,
+    imgOpacity: watermarkImageOpacity.value,
+    imgSize: watermarkSize.value,
+    pos: { ...watermarkPos }
+  };
+  window.ipcRenderer.saveTemplate(name, template);
+  loadTemplates();
+});
+
+function loadTemplates() {
+  window.ipcRenderer.getTemplates().then(templates => {
+    templatesList.innerHTML = '';
+    if (!templates || Object.keys(templates).length === 0) {
       templatesList.innerHTML = '<p>无保存的模板</p>';
       return;
     }
-    
-    templatesList.innerHTML = '';
-    templates.forEach(template => {
-      const templateItem = document.createElement('div');
-      templateItem.className = 'template-item';
-      
-      const templateName = document.createElement('span');
-      templateName.textContent = template.name;
-      templateName.addEventListener('click', () => {
-        loadTemplate(template);
+    Object.entries(templates).forEach(([name, tpl]) => {
+      const div = document.createElement('div');
+      div.className = 'template-item';
+      div.innerHTML = `
+        <span>${name}</span>
+        <button data-name="${name}">删除</button>
+      `;
+      div.addEventListener('click', e => {
+        if (e.target.tagName === 'BUTTON') {
+          window.ipcRenderer.deleteTemplate(name);
+          loadTemplates();
+        } else {
+          applyTemplate(tpl);
+        }
       });
-      
-      const deleteBtn = document.createElement('button');
-      deleteBtn.textContent = '×';
-      deleteBtn.title = '删除模板';
-      deleteBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        deleteTemplate(template.name);
-      });
-      
-      templateItem.appendChild(templateName);
-      templateItem.appendChild(deleteBtn);
-      templatesList.appendChild(templateItem);
+      templatesList.appendChild(div);
     });
-  } catch (error) {
-    console.error('加载模板失败:', error);
-  }
+  });
 }
 
-function loadTemplate(template) {
-  // 加载水印配置
-  if (template.watermarkConfig) {
-    const config = template.watermarkConfig;
-    document.querySelector(`input[name="watermark-type"][value="${config.type}"]`).checked = true;
-    toggleWatermarkSettings();
-    
-    if (watermarkText) watermarkText.value = config.text || '';
-    if (watermarkOpacity) watermarkOpacity.value = config.opacity || 50;
-    if (watermarkSize) watermarkSize.value = config.size || 20;
-    if (watermarkImageOpacity) watermarkImageOpacity.value = config.imageOpacity || 50;
-    
-    updateOpacityValue();
-    updateSizeValue();
-    updateImageOpacityValue();
-  }
-  
-  // 加载导出配置
-  if (template.exportConfig) {
-    const config = template.exportConfig;
-    if (outputFormat) outputFormat.value = config.format || '.jpg';
-    if (filePrefix) filePrefix.value = config.prefix || '';
-    if (fileSuffix) fileSuffix.value = config.suffix || '';
-  }
+function applyTemplate(tpl) {
+  if (!tpl) return;
+  document.querySelector(`input[name="watermark-type"][value="${tpl.type}"]`).checked = true;
+  watermarkText.value = tpl.text || '';
+  watermarkOpacity.value = tpl.opacity || 50;
+  watermarkImagePath = tpl.imgPath || null;
+  watermarkImageOpacity.value = tpl.imgOpacity || 50;
+  watermarkSize.value = tpl.imgSize || 20;
+  watermarkPos = { ...tpl.pos } || { x: 50, y: 50 };
+  drawPreview();
+  watermarkTypeRadios.forEach(r => r.dispatchEvent(new Event('change')));
 }
 
-function deleteTemplate(name) {
-  if (confirm(`确定要删除模板 "${name}" 吗？`)) {
-    window.electron.deleteTemplate(name);
-    loadTemplatesList();
-  }
-}
-
-function getFileName(path) {
-  const parts = path.split('\\');
-  return parts[parts.length - 1];
-}
-
-// 监听模板保存和删除事件
-window.electron.onTemplateSaved(() => {
-  loadTemplatesList();
-});
-
-window.electron.onTemplateDeleted(() => {
-  loadTemplatesList();
-});
+// 初始化
+loadTemplates();

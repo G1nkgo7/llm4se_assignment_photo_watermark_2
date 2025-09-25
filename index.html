@@ -12,11 +12,13 @@
       <h1>Photo Watermark 2</h1>
       <div class="header-buttons">
         <button id="import-btn" class="btn-primary">导入图片</button>
+        <button id="import-folder-btn" class="btn-primary">批量导入文件夹</button>
         <button id="export-btn" class="btn-primary">导出图片</button>
       </div>
     </header>
 
     <main>
+      <!-- 左侧图片列表 -->
       <div class="sidebar">
         <div class="image-list">
           <h3>已导入图片</h3>
@@ -24,15 +26,17 @@
         </div>
       </div>
 
+      <!-- 中间预览 -->
       <div class="preview-section">
         <div id="preview-container" class="preview-container">
+          <canvas id="preview-canvas"></canvas>
           <div id="no-preview" class="no-preview">
             <p>请导入图片以预览</p>
           </div>
-          <img id="preview-image" class="preview-image" style="display: none;">
         </div>
       </div>
 
+      <!-- 右侧水印设置 -->
       <div class="watermark-settings">
         <h3>水印设置</h3>
         
@@ -44,6 +48,7 @@
           </div>
         </div>
 
+        <!-- 文本水印设置 -->
         <div id="text-settings" class="setting-group">
           <label for="watermark-text">水印文本</label>
           <input type="text" id="watermark-text" placeholder="请输入水印文本">
@@ -53,6 +58,7 @@
           <span id="opacity-value">50</span>
         </div>
 
+        <!-- 图片水印设置 -->
         <div id="image-settings" class="setting-group" style="display: none;">
           <button id="select-watermark-btn" class="btn-secondary">选择水印图片</button>
           <p id="watermark-image-path" class="file-path"></p>
@@ -67,7 +73,6 @@
         </div>
 
         <h3>导出设置</h3>
-        
         <div class="setting-group">
           <button id="select-output-btn" class="btn-secondary">选择输出目录</button>
           <p id="output-dir" class="file-path"></p>
@@ -86,7 +91,6 @@
         </div>
 
         <h3>模板管理</h3>
-        
         <div class="setting-group">
           <div class="template-controls">
             <input type="text" id="template-name" placeholder="模板名称">
@@ -102,5 +106,87 @@
   </div>
 
   <script src="renderer.js"></script>
+  <script>
+    // ----------------------------
+    // Canvas水印实时预览拖拽
+    // ----------------------------
+    const canvas = document.getElementById('preview-canvas');
+    const ctx = canvas.getContext('2d');
+
+    let watermarkPos = { x: 50, y: 50 };
+    let isDragging = false;
+
+    function drawPreview() {
+      if (!importedFiles[currentImageIndex]) return;
+      const img = new Image();
+      img.src = importedFiles[currentImageIndex];
+      img.onload = () => {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+
+        const wmType = document.querySelector('input[name="watermark-type"]:checked').value;
+        if (wmType === 'text' && watermarkText.value) {
+          ctx.globalAlpha = watermarkOpacity.value / 100;
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '40px sans-serif';
+          ctx.fillText(watermarkText.value, watermarkPos.x, watermarkPos.y);
+          ctx.globalAlpha = 1.0;
+        } else if (wmType === 'image' && watermarkImagePath) {
+          const wmImg = new Image();
+          wmImg.src = watermarkImagePath;
+          wmImg.onload = () => {
+            const scale = watermarkSize.value / 100;
+            const w = wmImg.width * scale;
+            const h = wmImg.height * scale;
+            ctx.globalAlpha = watermarkImageOpacity.value / 100;
+            ctx.drawImage(wmImg, watermarkPos.x, watermarkPos.y, w, h);
+            ctx.globalAlpha = 1.0;
+          };
+        }
+      };
+    }
+
+    // 绑定输入变化刷新
+    [watermarkText, watermarkOpacity, watermarkSize, watermarkImageOpacity].forEach(el => {
+      el.addEventListener('input', drawPreview);
+    });
+
+    // 拖拽水印
+    canvas.addEventListener('mousedown', e => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      // 简单判断点击范围（可优化）
+      if (Math.abs(x - watermarkPos.x) < 100 && Math.abs(y - watermarkPos.y) < 50) {
+        isDragging = true;
+      }
+    });
+
+    canvas.addEventListener('mousemove', e => {
+      if (!isDragging) return;
+      const rect = canvas.getBoundingClientRect();
+      watermarkPos.x = e.clientX - rect.left;
+      watermarkPos.y = e.clientY - rect.top;
+      drawPreview();
+    });
+
+    canvas.addEventListener('mouseup', e => {
+      isDragging = false;
+    });
+
+    canvas.addEventListener('mouseleave', e => {
+      isDragging = false;
+    });
+
+    // 切换图片也刷新canvas
+    function selectImage(index) {
+      if (index < 0 || index >= importedFiles.length) return;
+      currentImageIndex = index;
+      drawPreview();
+      renderImageThumbnails();
+    }
+  </script>
 </body>
 </html>

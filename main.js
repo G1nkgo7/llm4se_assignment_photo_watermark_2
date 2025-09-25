@@ -1,166 +1,172 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const sharp = require('sharp');
 
-let mainWindow;
+let templates = {}; // 模板存储
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+  const win = new BrowserWindow({
+    width: 1400,
+    height: 900,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      nodeIntegration: false,
       contextIsolation: true,
-      enableRemoteModule: false
+      nodeIntegration: false
     }
   });
 
-  mainWindow.loadFile('index.html');
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
+  win.loadFile('index.html');
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
-
-// 处理文件导入
-ipcMain.handle('import-files', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile', 'openDirectory', 'multiSelections'],
+// ----------------------
+// 图片选择
+// ----------------------
+ipcMain.handle('select-images', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile', 'multiSelections'],
     filters: [
-      { name: '图片文件', extensions: ['jpg', 'jpeg', 'png', 'bmp', 'tiff'] }
+      { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'bmp', 'tiff'] }
     ]
   });
   return result.canceled ? [] : result.filePaths;
 });
 
-// 处理保存水印配置
-ipcMain.on('save-template', (event, templateData) => {
-  const templatesDir = path.join(app.getPath('userData'), 'templates');
-  if (!fs.existsSync(templatesDir)) {
-    fs.mkdirSync(templatesDir, { recursive: true });
-  }
-  const templatePath = path.join(templatesDir, `${templateData.name}.json`);
-  fs.writeFileSync(templatePath, JSON.stringify(templateData, null, 2));
-  event.reply('template-saved');
-});
-
-// 加载水印模板
-ipcMain.handle('load-templates', () => {
-  const templatesDir = path.join(app.getPath('userData'), 'templates');
-  if (!fs.existsSync(templatesDir)) return [];
-  const files = fs.readdirSync(templatesDir).filter(file => file.endsWith('.json'));
-  return files.map(file => {
-    const content = fs.readFileSync(path.join(templatesDir, file), 'utf8');
-    return JSON.parse(content);
+// 添加批量导入文件夹的处理程序
+ipcMain.handle('select-folder', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openDirectory'],
+    title: '选择要导入的文件夹'
   });
-});
 
-// 删除水印模板
-ipcMain.on('delete-template', (event, templateName) => {
-  const templatePath = path.join(app.getPath('userData'), 'templates', `${templateName}.json`);
-  if (fs.existsSync(templatePath)) {
-    fs.unlinkSync(templatePath);
+  if (result.canceled) {
+    return null; // 取消选择返回 null
   }
-  event.reply('template-deleted');
+
+  if (!result.filePaths.length) {
+    return []; // 理论上不会出现，但保险处理
+  }
+
+  const folderPath = result.filePaths[0];
+  const validImageExtensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff'];
+  const imageFiles = [];
+
+  function processDir(dir) {
+    const files = fs.readdirSync(dir, { withFileTypes: true });
+    files.forEach(file => {
+      const fullPath = path.join(dir, file.name);
+      if (file.isDirectory()) {
+        processDir(fullPath);
+      } else if (validImageExtensions.some(ext => file.name.toLowerCase().endsWith(ext))) {
+        imageFiles.push(fullPath);
+      }
+    });
+  }
+
+  processDir(folderPath);
+
+  return imageFiles.length ? imageFiles : []; // 空文件夹返回 []
 });
 
-// 处理导出图片
-ipcMain.handle('export-images', async (event, { files, outputDir, watermarkConfig, namingConfig }) => {
-  const results = [];
-  
-  for (const file of files) {
+ipcMain.handle('select-folder-for-path', async (event, folderPath) => {
+  const validExt = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff'];
+  const imageFiles = [];
+
+  function processDir(dir) {
+    const files = fs.readdirSync(dir, { withFileTypes: true });
+    files.forEach(file => {
+      const fullPath = path.join(dir, file.name);
+      if (file.isDirectory()) processDir(fullPath);
+      else if (validExt.some(ext => file.name.toLowerCase().endsWith(ext))) {
+        imageFiles.push(fullPath);
+      }
+    });
+  }
+
+  processDir(folderPath);
+  return imageFiles;
+});
+
+
+// 拖拽文件夹递归读取图片
+ipcMain.handle('read-folder-images', async (event, folderPath) => {
+  const validExt = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff'];
+  const imageFiles = [];
+
+  function readDir(dir) {
     try {
-      const fileName = path.basename(file);
-      const fileExt = path.extname(fileName).toLowerCase();
-      const baseName = path.basename(fileName, fileExt);
-      
-      // 根据命名规则生成输出文件名
-      let outputName;
-      if (namingConfig.prefix && namingConfig.suffix) {
-        outputName = `${namingConfig.prefix}${baseName}${namingConfig.suffix}${namingConfig.format}`;
-      } else if (namingConfig.prefix) {
-        outputName = `${namingConfig.prefix}${baseName}${namingConfig.format}`;
-      } else if (namingConfig.suffix) {
-        outputName = `${baseName}${namingConfig.suffix}${namingConfig.format}`;
-      } else {
-        outputName = `${baseName}_watermarked${namingConfig.format}`;
-      }
-      
-      const outputPath = path.join(outputDir, outputName);
-      
-      // 处理图片
-      const image = sharp(file);
-      const metadata = await image.metadata();
-      
-      // 根据水印类型处理
-      if (watermarkConfig.type === 'text') {
-        // 创建文本水印
-        // 注意：Sharp本身不直接支持文本绘制，这里我们使用一个简化的方法
-        // 在实际应用中，可能需要使用canvas或其他库来生成文本图像
-        const textWatermark = sharp({
-          create: {
-            width: metadata.width,
-            height: metadata.height,
-            channels: 4,
-            background: { r: 0, g: 0, b: 0, alpha: 0 }
-          }
-        });
-        
-        // 这里只是一个示例，实际实现需要更复杂的文本渲染逻辑
-        // 为了简化，我们将直接叠加原图
-        await image.toFile(outputPath);
-      } else if (watermarkConfig.type === 'image' && watermarkConfig.imagePath) {
-        // 图片水印
-        const watermark = sharp(watermarkConfig.imagePath)
-          .resize({
-            width: Math.floor(metadata.width * watermarkConfig.size / 100),
-            height: Math.floor(metadata.height * watermarkConfig.size / 100),
-            fit: 'inside'
-          })
-          .opacity(watermarkConfig.opacity / 100);
-        
-        await image.composite([{
-          input: await watermark.toBuffer(),
-          gravity: 'center'
-        }]).toFile(outputPath);
-      }
-      
-      results.push({ success: true, file: outputPath });
-    } catch (error) {
-      results.push({ success: false, file, error: error.message });
+      const files = fs.readdirSync(dir, { withFileTypes: true });
+      files.forEach(file => {
+        const fullPath = path.join(dir, file.name);
+        if (file.isDirectory()) readDir(fullPath);
+        else if (validExt.some(ext => file.name.toLowerCase().endsWith(ext))) {
+          imageFiles.push(fullPath);
+        }
+      });
+    } catch (err) {
+      console.error('读取目录失败:', dir, err);
     }
   }
-  
-  return results;
+
+  readDir(folderPath);
+  return imageFiles; // 空数组也返回
 });
 
-// 选择输出目录
+
+ipcMain.handle('select-watermark-image', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [{ name: 'PNG', extensions: ['png'] }]
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
 ipcMain.handle('select-output-dir', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog({
     properties: ['openDirectory']
   });
   return result.canceled ? null : result.filePaths[0];
 });
 
-// 选择水印图片
-ipcMain.handle('select-watermark-image', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
-    filters: [
-      { name: '图片文件', extensions: ['png', 'jpg', 'jpeg'] }
-    ]
+// ----------------------
+// 保存图片
+// ----------------------
+ipcMain.handle('save-image', async (event, dataURL, savePath) => {
+  try {
+    const base64Data = dataURL.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    fs.writeFileSync(savePath, buffer);
+    return true;
+  } catch (err) {
+    console.error(err);
+    return false;
+  }
+});
+
+// ----------------------
+// 模板管理
+// ----------------------
+ipcMain.handle('save-template', (event, name, template) => {
+  templates[name] = template;
+  return true;
+});
+
+ipcMain.handle('get-templates', () => {
+  return templates;
+});
+
+ipcMain.handle('delete-template', (event, name) => {
+  delete templates[name];
+  return true;
+});
+
+// ----------------------
+app.whenReady().then(() => {
+  createWindow();
+  app.on('activate', function () {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-  return result.canceled ? null : result.filePaths[0];
+});
+
+app.on('window-all-closed', function () {
+  if (process.platform !== 'darwin') app.quit();
 });

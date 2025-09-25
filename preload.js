@@ -1,13 +1,14 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('electron', {
-  importFiles: () => ipcRenderer.invoke('import-files'),
-  selectOutputDir: () => ipcRenderer.invoke('select-output-dir'),
+contextBridge.exposeInMainWorld('ipcRenderer', {
+  importFiles: () => ipcRenderer.invoke('select-images'),
+  selectFolder: () => ipcRenderer.invoke('select-folder'),
   selectWatermarkImage: () => ipcRenderer.invoke('select-watermark-image'),
-  exportImages: (data) => ipcRenderer.invoke('export-images', data),
-  saveTemplate: (templateData) => ipcRenderer.send('save-template', templateData),
-  loadTemplates: () => ipcRenderer.invoke('load-templates'),
-  deleteTemplate: (templateName) => ipcRenderer.send('delete-template', templateName),
-  onTemplateSaved: (callback) => ipcRenderer.on('template-saved', callback),
-  onTemplateDeleted: (callback) => ipcRenderer.on('template-deleted', callback)
+  selectOutputDir: () => ipcRenderer.invoke('select-output-dir'),
+  saveImage: (dataURL, path) => ipcRenderer.invoke('save-image', dataURL, path),
+  saveTemplate: (name, tpl) => ipcRenderer.invoke('save-template', name, tpl),
+  getTemplates: () => ipcRenderer.invoke('get-templates'),
+  deleteTemplate: (name) => ipcRenderer.invoke('delete-template', name),
+  // 新增方法：递归读取文件夹内图片
+  readFolderImages: (folderPath) => ipcRenderer.invoke('select-folder-for-path', folderPath),
 });

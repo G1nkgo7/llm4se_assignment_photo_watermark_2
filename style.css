@@ -249,3 +249,20 @@ main {
     width: 250px;
   }
 }
+
+/* 在现有样式基础上添加以下内容 */
+
+.preview-container.drag-over {
+  border: 3px dashed #3498db;
+  background-color: rgba(52, 152, 219, 0.1);
+  border-radius: 8px;
+}
+
+.preview-container.drag-over .no-preview p {
+  color: #3498db;
+}
+
+/* 可以添加一个简单的动画效果 */
+.preview-container {
+  transition: all 0.3s ease;
+}
