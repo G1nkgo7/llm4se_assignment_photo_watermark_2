@@ -18,6 +18,13 @@ function createWindow() {
 
   win.loadFile('index.html');
 }
+// ----------------------
+// 【新增】获取文件目录
+// ----------------------
+ipcMain.handle('get-dir-path', (event, filePath) => {
+  // 使用 Node.js 的 path 模块安全地获取目录名
+  return path.dirname(filePath);
+});
 
 
 ipcMain.handle('get-preview-data-url', async (event, filePath) => {

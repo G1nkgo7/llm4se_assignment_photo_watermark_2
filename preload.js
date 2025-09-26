@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('ipcRenderer', {
   saveTemplate: (name, tpl) => ipcRenderer.invoke('save-template', name, tpl),
   getTemplates: () => ipcRenderer.invoke('get-templates'),
   deleteTemplate: (name) => ipcRenderer.invoke('delete-template', name),
-  // 新增方法：递归读取文件夹内图片
   readFolderImages: (folderPath) => ipcRenderer.invoke('select-folder-for-path', folderPath),
   getPreviewDataUrl: (filePath) => ipcRenderer.invoke('get-preview-data-url', filePath),
+  getDirPath: (filePath) => ipcRenderer.invoke('get-dir-path', filePath), 
 });
