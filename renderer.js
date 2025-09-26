@@ -10,6 +10,7 @@ const importFolderBtn = document.getElementById("import-folder-btn");
 const exportBtn = document.getElementById("export-btn");
 const imageThumbnails = document.getElementById("image-thumbnails");
 const previewContainer = document.getElementById("preview-container");
+const filenamePreview = document.getElementById("filename-preview"); 
 
 // Canvas 相关的 DOM 元素和上下文 (从 index.html 移动过来)
 const previewCanvas = document.getElementById("preview-canvas");
@@ -60,6 +61,7 @@ importBtn.addEventListener("click", async () => {
     currentImageIndex = importedFiles.length - files.length;
     renderImageThumbnails();
     drawPreview(); // 直接调用
+    updateFilenamePreview();
   }
 });
 
@@ -81,6 +83,7 @@ importFolderBtn.addEventListener("click", async () => {
     } catch (error) {
       console.error("drawPreview 出错:", error);
     } // 直接调用
+    updateFilenamePreview();
   } catch (error) {
     console.error("导入文件夹时出错:", error);
     showAlert("导入文件夹失败，请重试");
@@ -269,11 +272,18 @@ async function drawPreview() {
   };
 }
 
+// 绑定文件名预览的实时更新
+[filePrefix, fileSuffix, outputFormat].forEach((el) => {
+  el.addEventListener("input", updateFilenamePreview);
+  el.addEventListener("change", updateFilenamePreview); // 针对 select 元素
+});
+
 function selectImage(index) {
   if (index < 0 || index >= importedFiles.length) return;
   currentImageIndex = index;
   renderImageThumbnails();
   drawPreview();
+  updateFilenamePreview();
 }
 
 // ----------------------
@@ -332,6 +342,17 @@ selectWatermarkBtn.addEventListener("click", async () => {
 selectOutputBtn.addEventListener("click", async () => {
   const dir = await window.ipcRenderer.selectOutputDir();
   if (dir) {
+    // 1. 如果有导入图片，执行检查
+    if (importedFiles.length > 0) {
+      // 必须使用 await 等待异步检查结果
+      if (await isExportingToSourceDirectory(dir, importedFiles)) {
+        showAlert("输出目录不能是原图所在的文件夹！请选择新的目录。");
+        // 如果冲突，则不更新 outputDir，禁止选择该目录
+        return;
+      }
+    }
+
+    // 2. 检查通过或没有导入图片时，设置目录
     outputDir = dir;
     outputDirEl.textContent = dir;
   }
@@ -358,14 +379,43 @@ async function isExportingToSourceDirectory(outputDir, importedFiles) {
   for (const filePath of importedFiles) {
     // 异步调用 IPC 方法获取文件所在的目录
     const sourceDir = await window.ipcRenderer.getDirPath(filePath);
-
     // 规范化源目录
     const normalizedSourceDir = sourceDir.replace(/[/\\]+$/, "").toLowerCase();
     if (normalizedSourceDir === normalizedOutputDir) {
+      //  showAlert(`检查文件 ${normalizedSourceDir} 所在目录：${normalizedOutputDir}`);
       return true; // 发现冲突
     }
   }
   return false; // 没有发现冲突
+}
+// renderer.js (新增函数)
+
+/**
+ * 根据当前设置和选中的图片，更新文件名预览
+ */
+function updateFilenamePreview() {
+  if (!importedFiles.length) {
+    filenamePreview.textContent = "文件名预览: 请导入图片";
+    return;
+  }
+
+  // 获取当前选中图片的基本名称
+  const originalPath = importedFiles[currentImageIndex];
+  const filename = originalPath.split(/[/\\]/).pop();
+  const baseName = filename.replace(/\.[^/.]+$/, "");
+
+  const format = outputFormat.value || ".png";
+  const rawPrefix = filePrefix.value.trim();
+  const rawSuffix = fileSuffix.value.trim();
+
+  // 构建前缀和后缀，如果非空则加下划线
+  const pre = rawPrefix ? `${rawPrefix}_` : "";
+  const suf = rawSuffix ? `_${rawSuffix}` : "";
+
+  // 组合文件名
+  const outName = `${pre}${baseName}${suf}${format}`;
+
+  filenamePreview.textContent = `文件名预览: ${outName}`;
 }
 
 function showAlert(message) {
@@ -392,7 +442,7 @@ exportBtn.addEventListener("click", async () => {
     return;
   }
 
-  if (isExportingToSourceDirectory(outputDir, importedFiles)) {
+  if (await isExportingToSourceDirectory(outputDir, importedFiles)) {
     showAlert("输出目录不能是原图所在的文件夹！请选择新的目录以防止覆盖原图。"); // <--- 替换 alert
     return;
   }
@@ -452,14 +502,28 @@ exportBtn.addEventListener("click", async () => {
   }
 });
 
+// renderer.js (替换 saveImage 函数)
+
 function saveImage(canvasEl, originalPath) {
   const format = outputFormat.value || ".png";
-  const prefix = filePrefix.value || "";
-  const suffix = fileSuffix.value || "";
+
+  const rawPrefix = filePrefix.value.trim();
+  const rawSuffix = fileSuffix.value.trim();
+
+  // 核心逻辑：如果前缀不为空，则加上下划线并放在末尾；否则为空字符串
+  const pre = rawPrefix ? `${rawPrefix}_` : "";
+
+  // 核心逻辑：如果后缀不为空，则加上下划线并放在开头；否则为空字符串
+  const suf = rawSuffix ? `_${rawSuffix}` : "";
+
   const filename = originalPath.split(/[/\\]/).pop();
   const baseName = filename.replace(/\.[^/.]+$/, "");
-  const outName = `${prefix}${baseName}${suffix}${format}`;
+
+  // 组合：前缀 + 文件名本体 + 后缀 + 格式
+  const outName = `${pre}${baseName}${suf}${format}`;
+
   const dataURL = canvasEl.toDataURL("image/png");
+  // 假设 outputDir 变量已在其他地方正确定义
   window.ipcRenderer.saveImage(dataURL, `${outputDir}/${outName}`);
 }
 
