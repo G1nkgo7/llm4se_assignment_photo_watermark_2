@@ -119,8 +119,36 @@
               <option value=".jpg">JPEG</option>
               <option value=".png">PNG</option>
             </select>
+            <div id="jpeg-quality-settings" class="setting-group-sub">
+              <label for="jpeg-quality">JPEG 质量 (1-100)</label>
+              <input
+                type="range"
+                id="jpeg-quality"
+                min="1"
+                max="100"
+                value="90"
+              />
+              <span id="quality-value">90</span>
+            </div>
 
-            <p id="filename-preview" style="margin-top: 10px; font-weight: bold;">文件名预览: </p>
+            <div class="setting-group-sub">
+              <label for="resize-percentage">缩放百分比 (%)</label>
+              <input
+                type="range"
+                id="resize-percentage"
+                min="10"
+                max="100"
+                value="100"
+              />
+              <span id="resize-value">100</span>
+            </div>
+
+            <p
+              id="filename-preview"
+              style="margin-top: 10px; font-weight: bold"
+            >
+              文件名预览:
+            </p>
 
             <label for="file-prefix">文件前缀</label>
             <input type="text" id="file-prefix" placeholder="可选" />

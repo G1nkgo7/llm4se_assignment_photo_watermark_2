@@ -10,7 +10,7 @@ const importFolderBtn = document.getElementById("import-folder-btn");
 const exportBtn = document.getElementById("export-btn");
 const imageThumbnails = document.getElementById("image-thumbnails");
 const previewContainer = document.getElementById("preview-container");
-const filenamePreview = document.getElementById("filename-preview"); 
+const filenamePreview = document.getElementById("filename-preview");
 
 // Canvas 相关的 DOM 元素和上下文 (从 index.html 移动过来)
 const previewCanvas = document.getElementById("preview-canvas");
@@ -38,6 +38,12 @@ const outputDirEl = document.getElementById("output-dir");
 const outputFormat = document.getElementById("output-format");
 const filePrefix = document.getElementById("file-prefix");
 const fileSuffix = document.getElementById("file-suffix");
+const jpegQualitySettings = document.getElementById("jpeg-quality-settings");
+const jpegQuality = document.getElementById("jpeg-quality");
+const qualityValue = document.getElementById("quality-value");
+const resizePercentage = document.getElementById("resize-percentage");
+const resizeValue = document.getElementById("resize-value");
+
 const saveTemplateBtn = document.getElementById("save-template-btn");
 const templateNameInput = document.getElementById("template-name");
 const templatesList = document.getElementById("templates-list");
@@ -50,6 +56,37 @@ const customAlertClose = document.getElementById("custom-alert-close");
 // 水印位置和拖拽状态 (从 index.html 移动过来)
 let watermarkPos = { x: 50, y: 50 };
 let isDragging = false;
+
+// ----------------------
+// JPEG 质量和缩放百分比实时显示
+// ----------------------
+jpegQuality.addEventListener("input", () => {
+  qualityValue.textContent = jpegQuality.value;
+});
+
+resizePercentage.addEventListener("input", () => {
+  resizeValue.textContent = resizePercentage.value;
+});
+
+// ----------------------
+// 格式切换时显示/隐藏 JPEG 质量设置
+// ----------------------
+outputFormat.addEventListener("change", () => {
+  if (outputFormat.value === ".jpg") {
+    jpegQualitySettings.style.display = "block";
+  } else {
+    jpegQualitySettings.style.display = "none";
+  }
+  updateFilenamePreview();
+});
+
+// 初始化时检查一次
+window.addEventListener("load", () => {
+  if (outputFormat.value !== ".jpg") {
+    jpegQualitySettings.style.display = "none";
+  }
+  setTimeout(updateFilenamePreview, 50);
+});
 
 // ----------------------
 // 点击导入图片
@@ -431,81 +468,53 @@ customAlertClose.addEventListener("click", () => {
 // ----------------------
 // 导出图片 (关键修改：替换 alert，并在 finally 中恢复)
 // ----------------------
+// renderer.js
 exportBtn.addEventListener("click", async () => {
   if (!importedFiles.length) {
-    showAlert("请导入图片！"); // <--- 替换 alert，代码继续执行到 return
+    showAlert("请导入图片！");
     return;
   }
 
   if (!outputDir) {
-    showAlert("请选择输出目录！"); // <--- 替换 alert
+    showAlert("请选择输出目录！");
     return;
   }
 
   if (await isExportingToSourceDirectory(outputDir, importedFiles)) {
-    showAlert("输出目录不能是原图所在的文件夹！请选择新的目录以防止覆盖原图。"); // <--- 替换 alert
+    showAlert("输出目录不能是原图所在的文件夹！");
     return;
   }
 
+  const exportParams = {
+    format: outputFormat.value,
+    quality: outputFormat.value === ".jpg" ? parseInt(jpegQuality.value) : 100,
+    resize: parseInt(resizePercentage.value),
+    prefix: filePrefix.value.trim(),
+    suffix: fileSuffix.value.trim(),
+    wmType: document.querySelector('input[name="watermark-type"]:checked').value,
+    wmText: watermarkText.value,
+    wmOpacity: watermarkOpacity.value,
+    wmImgPath: watermarkImagePath,
+    wmImgOpacity: watermarkImageOpacity.value,
+    wmSize: watermarkSize.value,
+    wmPos: watermarkPos,
+  };
+
   try {
-    for (let i = 0; i < importedFiles.length; i++) {
-      const img = new Image();
-      img.src = importedFiles[i];
-
-      await new Promise((resolve) => {
-        img.onload = () => {
-          // ... (导出逻辑不变)
-          const tempCanvas = document.createElement("canvas");
-          const tctx = tempCanvas.getContext("2d");
-          tempCanvas.width = img.width;
-          tempCanvas.height = img.height;
-          tctx.drawImage(img, 0, 0);
-
-          const wmType = document.querySelector(
-            'input[name="watermark-type"]:checked'
-          ).value;
-          if (wmType === "text" && watermarkText.value) {
-            tctx.globalAlpha = watermarkOpacity.value / 100;
-            tctx.fillStyle = "#ffffff";
-            tctx.font = "40px sans-serif";
-            tctx.fillText(watermarkText.value, watermarkPos.x, watermarkPos.y);
-            tctx.globalAlpha = 1.0;
-          } else if (wmType === "image" && watermarkImagePath) {
-            const wmImg = new Image();
-            wmImg.src = watermarkImagePath;
-            wmImg.onload = () => {
-              const scale = watermarkSize.value / 100;
-              const w = wmImg.width * scale;
-              const h = wmImg.height * scale;
-              tctx.globalAlpha = watermarkImageOpacity.value / 100;
-              tctx.drawImage(wmImg, watermarkPos.x, watermarkPos.y, w, h);
-              tctx.globalAlpha = 1.0;
-              saveImage(tempCanvas, importedFiles[i]);
-              resolve();
-            };
-            return;
-          }
-          saveImage(tempCanvas, importedFiles[i]);
-          resolve();
-        };
-
-        img.onerror = () => {
-          console.error("导出时图片加载失败:", importedFiles[i]);
-          resolve();
-        };
-      });
-    }
-    showAlert("导出完成！"); // <--- 替换 alert
-  } catch (error) {
-    console.error("导出过程中发生错误:", error);
-    showAlert("导出失败！请查看控制台获取详情。"); // <--- 替换 alert
+    await window.ipcRenderer.exportImages(importedFiles, outputDir, exportParams);
+    showAlert("导出完成！");
+  } catch (err) {
+    console.error("导出失败:", err);
+    showAlert("导出失败，请查看控制台。");
   }
 });
 
+
 // renderer.js (替换 saveImage 函数)
 
-function saveImage(canvasEl, originalPath) {
-  const format = outputFormat.value || ".png";
+function saveImage(canvasEl, originalPath, exportParams) {
+  // 从参数中获取格式、质量和缩放百分比
+  const { format, quality, resize } = exportParams;
 
   const rawPrefix = filePrefix.value.trim();
   const rawSuffix = fileSuffix.value.trim();
@@ -522,9 +531,15 @@ function saveImage(canvasEl, originalPath) {
   // 组合：前缀 + 文件名本体 + 后缀 + 格式
   const outName = `${pre}${baseName}${suf}${format}`;
 
-  const dataURL = canvasEl.toDataURL("image/png");
-  // 假设 outputDir 变量已在其他地方正确定义
-  window.ipcRenderer.saveImage(dataURL, `${outputDir}/${outName}`);
+  // ----------------------------------------------------
+  // 关键修改：不再使用 canvas.toDataURL，而是将所有参数发送给 main.js
+  // ----------------------------------------------------
+  window.ipcRenderer.saveImage(
+    originalPath, // 传递原图路径 (main.js 将使用 sharp 来处理)
+    `${outputDir}/${outName}`, // 目标保存路径
+    quality, // JPEG 质量
+    resize // 缩放百分比
+  );
 }
 
 // ----------------------
