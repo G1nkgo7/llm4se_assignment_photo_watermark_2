@@ -102,16 +102,66 @@ window.addEventListener("load", () => {
 });
 
 // ----------------------
+// 检查重复图片的通用函数
+// ----------------------
+function checkForDuplicateFiles(newFiles) {
+  const uniqueFiles = [];
+  const skippedFiles = [];
+  
+  newFiles.forEach(file => {
+    // 规范化文件路径以便于比较（在Windows上忽略大小写）
+    const normalizedFilePath = file.toLowerCase();
+    
+    // 检查是否已存在于已导入文件中
+    const isDuplicate = importedFiles.some(importedFile => 
+      importedFile.toLowerCase() === normalizedFilePath
+    );
+    
+    if (isDuplicate) {
+      skippedFiles.push(file);
+    } else {
+      uniqueFiles.push(file);
+    }
+  });
+  
+  return { uniqueFiles, skippedFiles };
+}
+
+// ----------------------
+// 显示跳过的重复图片提示
+// ----------------------
+function showSkippedFilesAlert(skippedFiles) {
+  if (skippedFiles.length > 0) {
+    const filenames = skippedFiles.map(file => {
+      // 只显示文件名而不是完整路径
+      return file.split(/[/\\]/).pop();
+    });
+    
+    let message = `跳过了 ${skippedFiles.length} 个重复图片：\n`;
+    message += filenames.join('\n');
+    
+    showAlert(message);
+  }
+}
+
+// ----------------------
 // 点击导入图片
 // ----------------------
 importBtn.addEventListener("click", async () => {
   const files = await window.ipcRenderer.importFiles();
   if (files && files.length) {
-    importedFiles.push(...files);
-    currentImageIndex = importedFiles.length - files.length;
-    renderImageThumbnails();
-    drawPreview(); // 直接调用
-    updateFilenamePreview();
+    const { uniqueFiles, skippedFiles } = checkForDuplicateFiles(files);
+    
+    if (uniqueFiles.length > 0) {
+      importedFiles.push(...uniqueFiles);
+      currentImageIndex = importedFiles.length - uniqueFiles.length;
+      renderImageThumbnails();
+      drawPreview(); // 直接调用
+      updateFilenamePreview();
+    }
+    
+    // 显示跳过的重复图片提示
+    showSkippedFilesAlert(skippedFiles);
   }
 });
 
@@ -125,15 +175,25 @@ importFolderBtn.addEventListener("click", async () => {
       showAlert("所选文件夹中未找到图片文件");
       return;
     }
-    importedFiles.push(...files);
-    currentImageIndex = importedFiles.length - files.length;
-    renderImageThumbnails();
-    try {
-      drawPreview();
-    } catch (error) {
-      console.error("drawPreview 出错:", error);
-    } // 直接调用
-    updateFilenamePreview();
+    
+    const { uniqueFiles, skippedFiles } = checkForDuplicateFiles(files);
+    
+    if (uniqueFiles.length > 0) {
+      importedFiles.push(...uniqueFiles);
+      currentImageIndex = importedFiles.length - uniqueFiles.length;
+      renderImageThumbnails();
+      try {
+        drawPreview();
+      } catch (error) {
+        console.error("drawPreview 出错:", error);
+      } // 直接调用
+      updateFilenamePreview();
+    } else {
+      showAlert("所选文件夹中的图片已全部导入");
+    }
+    
+    // 显示跳过的重复图片提示
+    showSkippedFilesAlert(skippedFiles);
   } catch (error) {
     console.error("导入文件夹时出错:", error);
     showAlert("导入文件夹失败，请重试");
@@ -193,11 +253,18 @@ async function handleDrop(e) {
 
   if (!imageFiles.length) return;
 
-  importedFiles.push(...imageFiles);
-  currentImageIndex = importedFiles.length - imageFiles.length;
-  renderImageThumbnails();
-  drawPreview(); // 直接调用
-  updateFilenamePreview();
+  const { uniqueFiles, skippedFiles } = checkForDuplicateFiles(imageFiles);
+  
+  if (uniqueFiles.length > 0) {
+    importedFiles.push(...uniqueFiles);
+    currentImageIndex = importedFiles.length - uniqueFiles.length;
+    renderImageThumbnails();
+    drawPreview(); // 直接调用
+    updateFilenamePreview();
+  }
+  
+  // 显示跳过的重复图片提示
+  showSkippedFilesAlert(skippedFiles);
 
 }
 
@@ -227,36 +294,147 @@ window.addEventListener("dragleave", (e) => {
 window.addEventListener("drop", handleDrop);
 
 // ----------------------
+// 删除单张图片
+// ----------------------
+function deleteImage(index) {
+  // 从导入文件数组中删除指定索引的图片
+  importedFiles.splice(index, 1);
+  
+  // 从缓存中删除对应的缩略图
+  const fileToRemove = importedFiles[index];
+  if (fileToRemove && thumbnailCache[fileToRemove]) {
+    delete thumbnailCache[fileToRemove];
+  }
+  
+  // 如果删除的是当前选中的图片，需要重新选择
+  if (index === currentImageIndex) {
+    // 如果还有图片，选择第一张或最后一张
+    if (importedFiles.length > 0) {
+      // 如果删除的是最后一张，选择新的最后一张
+      currentImageIndex = Math.min(index, importedFiles.length - 1);
+    } else {
+      currentImageIndex = -1;
+      // 确保预览区域显示"请导入图片以预览"提示
+      noPreview.style.display = "block";
+      // 显式清除Canvas内容
+      if (ctx) {
+        ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+      }
+      // 隐藏Canvas以确保残留图像不显示
+      previewCanvas.style.display = "none";
+    }
+  } else if (index < currentImageIndex) {
+    // 如果删除的是当前选中图片之前的图片，调整索引
+    currentImageIndex--;
+    // 确保Canvas可见
+    previewCanvas.style.display = "block";
+  }
+  
+  // 重新渲染缩略图和预览
+  renderImageThumbnails();
+  drawPreview();
+  updateFilenamePreview();
+}
+
+// ----------------------
+// 删除全部图片
+// ----------------------
+function deleteAllImages() {
+  // 清空导入文件数组和缓存
+  importedFiles = [];
+  thumbnailCache = {};
+  currentImageIndex = -1;
+  
+  // 确保预览区域显示"请导入图片以预览"提示
+  noPreview.style.display = "block";
+  
+  // 清除Canvas上的图片内容
+  if (previewCanvas && ctx) {
+    ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+  }
+  
+  // 隐藏Canvas以确保残留图像不显示
+  previewCanvas.style.display = "none";
+  
+  // 重新渲染缩略图和预览
+  renderImageThumbnails();
+  drawPreview();
+  updateFilenamePreview();
+}
+
+// ----------------------
 // 渲染缩略图
 // ----------------------
 function renderImageThumbnails() {
   imageThumbnails.innerHTML = "";
+  
+  // 先移除已存在的删除全部按钮
+  const existingBtn = imageThumbnails.parentNode.querySelector('.delete-all-btn');
+  if (existingBtn) {
+    imageThumbnails.parentNode.removeChild(existingBtn);
+  }
+  
+  // 如果有图片，显示删除全部按钮
+  if (importedFiles.length > 0) {
+    const deleteAllBtn = document.createElement('button');
+    deleteAllBtn.className = 'btn-secondary delete-all-btn';
+    deleteAllBtn.textContent = '删除全部';
+    deleteAllBtn.style.width = '100%';
+    deleteAllBtn.style.marginBottom = '10px';
+    deleteAllBtn.addEventListener('click', () => {
+      showConfirm('确定要删除所有已导入的图片吗？', () => {
+        deleteAllImages();
+      });
+    });
+    imageThumbnails.parentNode.insertBefore(deleteAllBtn, imageThumbnails);
+  }
+  
   importedFiles.forEach(async (file, index) => {
-    // 【核心改动 1】：检查缓存
+    // 检查缓存
     let dataUrl = thumbnailCache[file];
 
     if (!dataUrl) {
       // 缓存中没有，才调用 IPC 异步获取
       dataUrl = await window.ipcRenderer.getPreviewDataUrl(file);
       if (dataUrl) {
-        // 【核心改动 2】：存入缓存
+        // 存入缓存
         thumbnailCache[file] = dataUrl;
       }
     }
 
     const div = document.createElement("div");
-    div.className =
+    div.className = 
       "thumbnail" + (index === currentImageIndex ? " active" : "");
 
     // 如果获取失败，设置一个透明像素占位符
-    const imgSrc =
+    const imgSrc = 
       dataUrl ||
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
-    div.innerHTML = `
-      <img src="${imgSrc}" />
-      <div class="filename">${file.split(/[/\\]/).pop()}</div>
-    `;
+    // 创建图片元素并设置draggable="false"
+    const img = document.createElement('img');
+    img.src = imgSrc;
+    img.draggable = false;
+    div.appendChild(img);
+    
+    // 创建删除按钮
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-btn';
+    deleteBtn.innerHTML = '&times;';
+    deleteBtn.title = '删除此图片';
+    // 阻止冒泡，避免触发缩略图的点击事件
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteImage(index);
+    });
+    div.appendChild(deleteBtn);
+    
+    // 创建文件名元素
+    const filenameDiv = document.createElement('div');
+    filenameDiv.className = 'filename';
+    filenameDiv.textContent = file.split(/[\\/]/).pop();
+    div.appendChild(filenameDiv);
+    
     div.addEventListener("click", () => {
       selectImage(index);
     });
@@ -272,9 +450,13 @@ async function drawPreview() {
   if (!importedFiles[currentImageIndex]) {
     // 如果没有图片，则显示提示
     noPreview.style.display = "block";
+    // 确保Canvas隐藏
+    previewCanvas.style.display = "none";
     return;
   } else {
     noPreview.style.display = "none";
+    // 确保Canvas可见
+    previewCanvas.style.display = "block";
   }
 
   // 核心修改：异步获取图片的 Base64 数据 URL
@@ -673,7 +855,28 @@ function showAlert(message) {
   customAlertOverlay.style.display = "flex";
 }
 
-// 绑定关闭事件
+// 创建showConfirm函数处理确认对话框
+function showConfirm(message, onConfirm) {
+  // 使用现有的自定义提示框结构，但添加确认逻辑
+  customAlertMessage.textContent = message;
+  customAlertOverlay.style.display = "flex";
+  
+  // 临时保存原来的关闭处理函数
+  const originalOnClose = customAlertClose.onclick;
+  
+  // 设置新的关闭处理，只有点击确定才执行确认回调
+  customAlertClose.onclick = function() {
+    customAlertOverlay.style.display = "none";
+    // 恢复原来的关闭处理函数
+    customAlertClose.onclick = originalOnClose;
+    // 执行确认回调
+    if (onConfirm && typeof onConfirm === 'function') {
+      onConfirm();
+    }
+  };
+}
+
+// 绑定默认关闭事件
 customAlertClose.addEventListener("click", () => {
   customAlertOverlay.style.display = "none";
 });

@@ -144,16 +144,21 @@ main {
 
 .no-preview {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
+  /* 垂直居中方法1：使用transform */
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  /* 确保内容正确显示 */
   color: #7f8c8d;
   font-size: 18px;
   z-index: 10;
+  margin: 0;
+  padding: 0;
+  text-align: center;
+  background: transparent;
+  line-height: normal;
+  /* 确保元素不会被截断 */
+  white-space: nowrap;
 }
 
 .watermark-settings {
@@ -276,4 +281,44 @@ main {
 /* 可以添加一个简单的动画效果 */
 .preview-container {
   transition: all 0.3s ease;
+}
+
+/* 删除按钮样式 */
+.thumbnail {
+  position: relative;
+}
+
+.delete-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 20px;
+  height: 20px;
+  background-color: rgba(231, 76, 60, 0.9);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 10;
+}
+
+.thumbnail:hover .delete-btn {
+  opacity: 1;
+}
+
+.delete-btn:hover {
+  background-color: rgba(202, 60, 60, 1);
+}
+
+/* 删除全部按钮样式 */
+.delete-all-btn {
+  background-color: #e74c3c !important;
+}
+
+.delete-all-btn:hover {
+  background-color: #c0392b !important;
 }
