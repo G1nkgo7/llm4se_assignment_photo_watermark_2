@@ -199,7 +199,7 @@ ipcMain.handle("export-images", async (event, files, outputDir, params) => {
         const svg = `
           <svg width="${metadata.width}" height="${metadata.height}">
             <text x="${params.wmPos.x}" y="${params.wmPos.y}"
-              font-size="40" fill="white" opacity="${params.wmOpacity / 100}">
+              font-size="40" font-family="sans-serif" fill="#ffffff" opacity="${params.wmOpacity / 100}">
               ${params.wmText}
             </text>
           </svg>`;
@@ -208,18 +208,33 @@ ipcMain.handle("export-images", async (event, files, outputDir, params) => {
 
       // 图片水印
       if (params.wmType === "image" && params.wmImgPath) {
-        const wm = await sharp(params.wmImgPath)
-          .resize({ width: Math.round((200 * params.wmSize) / 100) })
-          .png()
-          .toBuffer();
-        image = image.composite([
-          {
-            input: wm,
-            left: params.wmPos.x,
-            top: params.wmPos.y,
-            blend: "over",
-          },
-        ]);
+        try {
+          // 获取水印图片的元数据
+          const wmMetadata = await sharp(params.wmImgPath).metadata();
+          // 计算水印图片的缩放后的尺寸
+          const scale = params.wmSize / 100;
+          const scaledWidth = Math.round(wmMetadata.width * scale);
+          const scaledHeight = Math.round(wmMetadata.height * scale);
+          
+          // 调整水印图片大小并应用透明度
+          const wm = await sharp(params.wmImgPath)
+            .resize({ width: scaledWidth, height: scaledHeight })
+            .png()
+            .toBuffer();
+            
+          // 创建一个临时的SVG来应用透明度
+          const svgWithOpacity = `
+            <svg width="${metadata.width}" height="${metadata.height}">
+              <image x="${params.wmPos.x}" y="${params.wmPos.y}" 
+                width="${scaledWidth}" height="${scaledHeight}" 
+                href="data:image/png;base64,${wm.toString('base64')}" 
+                opacity="${params.wmImgOpacity / 100}"/>
+            </svg>`;
+          
+          image = image.composite([{ input: Buffer.from(svgWithOpacity) }]);
+        } catch (err) {
+          console.error('处理水印图片时出错:', err);
+        }
       }
 
       // 输出文件名

@@ -54,11 +54,15 @@ const customAlertMessage = document.getElementById("custom-alert-message");
 const customAlertClose = document.getElementById("custom-alert-close");
 
 // 水印位置和拖拽状态 (从 index.html 移动过来)
-let watermarkPos = { x: 50, y: 50 };
+// 存储水印的相对位置（相对于图片尺寸的百分比）
+let watermarkRelativePos = { x: 50, y: 50, initiated: false };
 let isDragging = false;
+// 临时存储当前预览中的绝对位置，用于拖拽操作
+let currentWatermarkAbsPos = { x: 50, y: 50 };
+let currentImageArea = null; // 存储当前图片的绘制区域信息
 
 // ----------------------
-// JPEG 质量和缩放百分比实时显示
+// JPEG 质量、缩放百分比和透明度实时显示
 // ----------------------
 jpegQuality.addEventListener("input", () => {
   qualityValue.textContent = jpegQuality.value;
@@ -66,6 +70,15 @@ jpegQuality.addEventListener("input", () => {
 
 resizePercentage.addEventListener("input", () => {
   resizeValue.textContent = resizePercentage.value;
+});
+
+// 添加透明度值实时更新
+watermarkOpacity.addEventListener("input", () => {
+  opacityValue.textContent = watermarkOpacity.value;
+});
+
+watermarkImageOpacity.addEventListener("input", () => {
+  imageOpacityValue.textContent = watermarkImageOpacity.value;
 });
 
 // ----------------------
@@ -184,6 +197,8 @@ async function handleDrop(e) {
   currentImageIndex = importedFiles.length - imageFiles.length;
   renderImageThumbnails();
   drawPreview(); // 直接调用
+  updateFilenamePreview();
+
 }
 
 // 监听整个窗口拖拽
@@ -277,11 +292,76 @@ async function drawPreview() {
   img.src = dataUrl; // 使用 Base64 数据 URL 作为源
 
   img.onload = () => {
-    // 调整 Canvas 尺寸以匹配图片
-    previewCanvas.width = img.width;
-    previewCanvas.height = img.height;
+    // 设置预览容器为固定尺寸（适应窗口大小）
+    const containerWidth = previewContainer.clientWidth;
+    const containerHeight = previewContainer.clientHeight;
+    
+    // 考虑15px的padding，计算可用空间
+    const padding = 15;
+    const availableWidth = containerWidth - (padding * 2);
+    const availableHeight = containerHeight - (padding * 2);
+    
+    // 固定Canvas尺寸为预览容器的尺寸
+    previewCanvas.width = containerWidth;
+    previewCanvas.height = containerHeight;
+    
+    // 清除画布
     ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-    ctx.drawImage(img, 0, 0);
+    
+    // 计算缩放比例，保持图片的原始宽高比
+    const imgRatio = img.width / img.height;
+    const containerRatio = availableWidth / availableHeight;
+    
+    let drawWidth, drawHeight;
+    
+    if (containerRatio > imgRatio) {
+      // 容器更宽，按高度缩放
+      drawHeight = Math.min(img.height, availableHeight);
+      drawWidth = drawHeight * imgRatio;
+    } else {
+      // 容器更高，按宽度缩放
+      drawWidth = Math.min(img.width, availableWidth);
+      drawHeight = drawWidth / imgRatio;
+    }
+    
+    // 计算居中位置（考虑padding）
+    const x = padding + (availableWidth - drawWidth) / 2;
+    const y = padding + (availableHeight - drawHeight) / 2;
+    
+    // 保存当前图片的绘制区域信息
+    currentImageArea = {
+      x: x,
+      y: y,
+      width: drawWidth,
+      height: drawHeight
+    };
+    
+    // 绘制缩放后的图片（居中显示）
+    ctx.drawImage(img, x, y, drawWidth, drawHeight);
+
+    // 计算水印的绝对位置（基于相对位置）
+    function calculateWatermarkPosition() {
+      // 如果是初始状态，将水印放在图片中心
+      if ((watermarkRelativePos.x === 50 && watermarkRelativePos.y === 50) || !watermarkRelativePos.initiated) {
+        return {
+          x: x + drawWidth / 2,
+          y: y + drawHeight / 2
+        };
+      }
+      // 否则，根据相对位置计算绝对位置
+      return {
+        x: x + (watermarkRelativePos.x / 100) * drawWidth,
+        y: y + (watermarkRelativePos.y / 100) * drawHeight
+      };
+    }
+    
+    // 获取当前水印的绝对位置
+    currentWatermarkAbsPos = calculateWatermarkPosition();
+    
+    // 标记为已初始化
+    if (!watermarkRelativePos.initiated) {
+      watermarkRelativePos.initiated = true;
+    }
 
     const wmType = document.querySelector(
       'input[name="watermark-type"]:checked'
@@ -291,7 +371,32 @@ async function drawPreview() {
       ctx.globalAlpha = watermarkOpacity.value / 100;
       ctx.fillStyle = "#ffffff";
       ctx.font = "40px sans-serif";
-      ctx.fillText(watermarkText.value, watermarkPos.x, watermarkPos.y);
+      
+      // 确保文本水印不会超出图片边界
+      // 测量文本宽度
+      const textMetrics = ctx.measureText(watermarkText.value);
+      const textWidth = textMetrics.width;
+      const textHeight = 50; // 估算的文本高度
+      
+      // 计算文本的实际绘制位置，确保不超出图片边界
+      let drawX = currentWatermarkAbsPos.x;
+      let drawY = currentWatermarkAbsPos.y;
+      
+      // 检查并修正水平边界
+      if (drawX < currentImageArea.x) drawX = currentImageArea.x;
+      if (drawX + textWidth > currentImageArea.x + currentImageArea.width) {
+        drawX = currentImageArea.x + currentImageArea.width - textWidth;
+      }
+      
+      // 检查并修正垂直边界
+      // 文本基线的特殊处理
+      if (drawY - textHeight < currentImageArea.y) drawY = currentImageArea.y + textHeight;
+      // 允许文本基线到达图片底部
+      if (drawY > currentImageArea.y + currentImageArea.height) {
+        drawY = currentImageArea.y + currentImageArea.height;
+      }
+      
+      ctx.fillText(watermarkText.value, drawX, drawY);
       ctx.globalAlpha = 1.0;
     } else if (wmType === "image" && watermarkImagePath) {
       // 图片水印
@@ -301,8 +406,25 @@ async function drawPreview() {
         const scale = watermarkSize.value / 100;
         const w = wmImg.width * scale;
         const h = wmImg.height * scale;
+        
+        // 确保图片水印不会超出图片边界
+        let drawX = currentWatermarkAbsPos.x;
+        let drawY = currentWatermarkAbsPos.y;
+        
+        // 检查并修正水平边界
+        if (drawX < currentImageArea.x) drawX = currentImageArea.x;
+        if (drawX + w > currentImageArea.x + currentImageArea.width) {
+          drawX = currentImageArea.x + currentImageArea.width - w;
+        }
+        
+        // 检查并修正垂直边界
+        if (drawY < currentImageArea.y) drawY = currentImageArea.y;
+        if (drawY + h > currentImageArea.y + currentImageArea.height) {
+          drawY = currentImageArea.y + currentImageArea.height - h;
+        }
+        
         ctx.globalAlpha = watermarkImageOpacity.value / 100;
-        ctx.drawImage(wmImg, watermarkPos.x, watermarkPos.y, w, h);
+        ctx.drawImage(wmImg, drawX, drawY, w, h);
         ctx.globalAlpha = 1.0;
       };
     }
@@ -335,12 +457,60 @@ function selectImage(index) {
 // ----------------------
 // 水印拖拽 (从 index.html 移动过来)
 // ----------------------
+// 获取水印的实际尺寸
+function getWatermarkDimensions() {
+  const wmType = document.querySelector('input[name="watermark-type"]:checked').value;
+  
+  if (wmType === "text" && watermarkText.value) {
+    // 为文本水印创建一个临时画布来测量文本大小
+    const tempCanvas = document.createElement('canvas');
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.font = "40px sans-serif";
+    const metrics = tempCtx.measureText(watermarkText.value);
+    // 使用更精确的文本高度估算，考虑到文本基线的问题
+    // 对于40px的字体，实际高度大约是字体大小的1.2倍
+    const textHeight = 48; // 比之前的50稍小，以确保可以到底部
+    return {
+      width: metrics.width,
+      height: textHeight
+    };
+  } else if (wmType === "image" && watermarkImagePath) {
+    // 对于图片水印，使用实际的图片尺寸
+    // 注意：这种方式不是100%准确，因为图片可能还没有加载完成
+    // 在实际应用中，可能需要在图片加载完成后缓存尺寸信息
+    try {
+      const img = new Image();
+      img.src = watermarkImagePath;
+      const scale = parseInt(watermarkSize.value) / 100;
+      return {
+        width: img.width * scale,
+        height: img.height * scale
+      };
+    } catch (e) {
+      // 如果获取尺寸失败，使用默认值
+      const scale = parseInt(watermarkSize.value) / 100;
+      return {
+        width: 150 * scale,
+        height: 100 * scale
+      };
+    }
+  }
+  
+  // 默认尺寸
+  return { width: 100, height: 50 };
+}
+
 previewCanvas.addEventListener("mousedown", (e) => {
   const rect = previewCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
-  // 简单判断点击范围（可优化）
-  if (Math.abs(x - watermarkPos.x) < 100 && Math.abs(y - watermarkPos.y) < 50) {
+  
+  // 获取水印的实际尺寸
+  const { width: hitboxWidth, height: hitboxHeight } = getWatermarkDimensions();
+  
+  // 检查点击是否在水印范围内
+  if (Math.abs(x - currentWatermarkAbsPos.x) < hitboxWidth && 
+      Math.abs(y - currentWatermarkAbsPos.y) < hitboxHeight) {
     isDragging = true;
   }
 });
@@ -348,8 +518,51 @@ previewCanvas.addEventListener("mousedown", (e) => {
 previewCanvas.addEventListener("mousemove", (e) => {
   if (!isDragging) return;
   const rect = previewCanvas.getBoundingClientRect();
-  watermarkPos.x = e.clientX - rect.left;
-  watermarkPos.y = e.clientY - rect.top;
+  
+  // 计算鼠标在画布上的绝对位置
+  const newX = e.clientX - rect.left;
+  const newY = e.clientY - rect.top;
+  
+  // 确保当前有图片区域信息
+  if (currentImageArea) {
+    // 获取水印的实际尺寸
+    const { width: wmWidth, height: wmHeight } = getWatermarkDimensions();
+    
+    // 确保水印不会超出图片边界
+    // 上部分不超过图片顶部
+    // 下部分不超过图片底部
+    // 左右同理
+    // 优化计算，确保可以拖拽到底部边界
+    const limitedX = Math.max(currentImageArea.x, Math.min(newX, currentImageArea.x + currentImageArea.width - wmWidth));
+    // 对于文本水印，需要考虑基线问题，让y值可以更接近底部
+    const wmType = document.querySelector('input[name="watermark-type"]:checked').value;
+    let limitedY;
+    
+    if (wmType === "text") {
+      // 文本水印特殊处理，允许更接近底部
+      limitedY = Math.max(currentImageArea.y, Math.min(newY, currentImageArea.y + currentImageArea.height));
+    } else {
+      // 图片水印保持原有逻辑
+      limitedY = Math.max(currentImageArea.y, Math.min(newY, currentImageArea.y + currentImageArea.height - wmHeight));
+    }
+    
+    // 更新当前预览中的绝对位置
+    currentWatermarkAbsPos.x = limitedX;
+    currentWatermarkAbsPos.y = limitedY;
+    
+    // 计算并更新相对位置（百分比）
+    watermarkRelativePos.x = ((limitedX - currentImageArea.x) / currentImageArea.width) * 100;
+    watermarkRelativePos.y = ((limitedY - currentImageArea.y) / currentImageArea.height) * 100;
+  } else {
+    // 如果没有图片区域信息，使用默认的边界限制
+    const padding = 15;
+    const availableWidth = previewCanvas.width - (padding * 2);
+    const availableHeight = previewCanvas.height - (padding * 2);
+    
+    currentWatermarkAbsPos.x = Math.max(padding, Math.min(newX, padding + availableWidth));
+    currentWatermarkAbsPos.y = Math.max(padding, Math.min(newY, padding + availableHeight));
+  }
+  
   drawPreview();
 });
 
@@ -485,6 +698,41 @@ exportBtn.addEventListener("click", async () => {
     return;
   }
 
+  // 确保导出时水印位置的计算与预览时保持一致
+  // 如果有当前图片区域信息，需要调整水印位置以匹配原始图片尺寸
+  let exportWmPos = { ...watermarkRelativePos };
+  
+  // 检查是否存在当前图片区域信息
+  if (currentImageArea && importedFiles[currentImageIndex]) {
+    try {
+      // 获取原始图片的元数据
+      const dataUrl = await window.ipcRenderer.getPreviewDataUrl(importedFiles[currentImageIndex]);
+      const img = new Image();
+      
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+      
+      // 计算预览图与原始图的比例
+      const scaleX = img.width / currentImageArea.width;
+      const scaleY = img.height / currentImageArea.height;
+      
+      // 根据相对位置计算原始图片上的绝对位置
+      // 首先获取原始图片的实际尺寸
+      const metadata = await sharp(file).metadata();
+      
+      exportWmPos = {
+        x: Math.round((watermarkRelativePos.x / 100) * metadata.width),
+        y: Math.round((watermarkRelativePos.y / 100) * metadata.height)
+      };
+    } catch (err) {
+      console.error('计算导出水印位置时出错:', err);
+      // 出错时使用原始位置
+    }
+  }
+  
   const exportParams = {
     format: outputFormat.value,
     quality: outputFormat.value === ".jpg" ? parseInt(jpegQuality.value) : 100,
@@ -497,7 +745,7 @@ exportBtn.addEventListener("click", async () => {
     wmImgPath: watermarkImagePath,
     wmImgOpacity: watermarkImageOpacity.value,
     wmSize: watermarkSize.value,
-    wmPos: watermarkPos,
+    wmPos: exportWmPos,
   };
 
   try {
@@ -555,7 +803,7 @@ saveTemplateBtn.addEventListener("click", () => {
     imgPath: watermarkImagePath,
     imgOpacity: watermarkImageOpacity.value,
     imgSize: watermarkSize.value,
-    pos: { ...watermarkPos },
+    pos: { ...watermarkRelativePos },
   };
   window.ipcRenderer.saveTemplate(name, template);
   loadTemplates();
@@ -598,10 +846,18 @@ function applyTemplate(tpl) {
   watermarkImagePath = tpl.imgPath || null;
   watermarkImageOpacity.value = tpl.imgOpacity || 50;
   watermarkSize.value = tpl.imgSize || 20;
-  watermarkPos = { ...tpl.pos } || { x: 50, y: 50 };
+  watermarkRelativePos = { ...tpl.pos } || { x: 50, y: 50, initiated: false };
   drawPreview();
   watermarkTypeRadios.forEach((r) => r.dispatchEvent(new Event("change")));
 }
 
 // 初始化
 loadTemplates();
+
+// 添加窗口大小变化事件监听器，使图片自适应窗口大小
+window.addEventListener('resize', () => {
+  // 当窗口大小改变时，重新绘制预览
+  if (importedFiles.length > 0) {
+    drawPreview();
+  }
+});
