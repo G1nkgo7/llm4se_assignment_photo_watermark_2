@@ -12,10 +12,17 @@ contextBridge.exposeInMainWorld("ipcRenderer", {
     ipcRenderer.invoke("export-images", files, outputDir, params),
   getTemplates: () => ipcRenderer.invoke("get-templates"),
   deleteTemplate: (name) => ipcRenderer.invoke("delete-template", name),
-  readFolderImages: (folderPath) =>
+  getFolderForPath: (folderPath) =>
     ipcRenderer.invoke("select-folder-for-path", folderPath),
   getPreviewDataUrl: (filePath) =>
     ipcRenderer.invoke("get-preview-data-url", filePath),
   getDirPath: (filePath) => ipcRenderer.invoke("get-dir-path", filePath),
-  getImageMetadata: (filePath) => ipcRenderer.invoke("get-image-metadata", filePath),
-  });
+  getImageMetadata: (filePath) =>
+    ipcRenderer.invoke("get-image-metadata", filePath),
+  saveSettings: (settings) => ipcRenderer.invoke("save-settings", settings),
+  getSettings: () => ipcRenderer.invoke("get-settings"),
+  getDefaultTemplate: () => ipcRenderer.invoke("get-default-template"),
+  // 新增：保存预览图片的方法
+  savePreviewImage: (imageData, savePath) =>
+    ipcRenderer.invoke("save-preview-image", imageData, savePath),
+});

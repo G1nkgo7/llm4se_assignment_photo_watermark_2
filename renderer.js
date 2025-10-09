@@ -54,7 +54,8 @@ const qualityValue = document.getElementById("quality-value");
 const resizePercentage = document.getElementById("resize-percentage");
 const resizeValue = document.getElementById("resize-value");
 
-const saveTemplateBtn = document.getElementById("save-template-btn");
+const updateTemplateBtn = document.getElementById("update-template-btn");
+const saveAsTemplateBtn = document.getElementById("save-as-template-btn");
 const templateNameInput = document.getElementById("template-name");
 const templatesList = document.getElementById("templates-list");
 
@@ -70,6 +71,9 @@ let isDragging = false;
 // 临时存储当前预览中的绝对位置，用于拖拽操作
 let currentWatermarkAbsPos = { x: 50, y: 50 };
 let currentImageArea = null; // 存储当前图片的绘制区域信息
+
+// 存储当前选中的模板
+let selectedTemplate = null;
 
 // ----------------------
 // JPEG 质量、缩放百分比和透明度实时显示
@@ -111,10 +115,22 @@ watermarkFont.addEventListener("change", drawPreview);
 watermarkColor.addEventListener("input", drawPreview);
 
 // 文本样式复选框事件监听器
-watermarkBold.addEventListener("change", drawPreview);
-watermarkItalic.addEventListener("change", drawPreview);
-watermarkShadow.addEventListener("change", drawPreview);
-watermarkStroke.addEventListener("change", drawPreview);
+watermarkBold.addEventListener("change", () => {
+  saveCurrentSettings();
+  drawPreview();
+});
+watermarkItalic.addEventListener("change", () => {
+  saveCurrentSettings();
+  drawPreview();
+});
+watermarkShadow.addEventListener("change", () => {
+  saveCurrentSettings();
+  drawPreview();
+});
+watermarkStroke.addEventListener("change", () => {
+  saveCurrentSettings();
+  drawPreview();
+});
 
 // ----------------------
 // 格式切换时显示/隐藏 JPEG 质量设置
@@ -217,7 +233,11 @@ window.addEventListener("load", async () => {
   }
 });
 
-// 窗口关闭前保存当前设置
+// 初始化模板
+  loadTemplates();
+  updateTemplateButtonsState();
+  
+  // 窗口关闭前保存当前设置
 window.addEventListener("beforeunload", async () => {
   try {
     const currentSettings = {
@@ -1273,9 +1293,199 @@ customAlertClose.addEventListener("click", () => {
 });
 
 // ----------------------
-// 导出图片 (关键修改：替换 alert，并在 finally 中恢复)
+// 为单张图片创建与原始尺寸一致的临时画布并应用水印
 // ----------------------
-// renderer.js
+async function createOriginalSizeCanvasWithWatermark(filePath) {
+  try {
+    // 获取原始图片的元数据
+    const metadata = await window.ipcRenderer.getImageMetadata(filePath);
+    const originalWidth = metadata.width || 800;
+    const originalHeight = metadata.height || 600;
+    
+    // 获取图片的Base64数据URL
+    const dataUrl = await window.ipcRenderer.getPreviewDataUrl(filePath);
+    
+    if (!dataUrl) {
+      console.error("无法加载图片:", filePath);
+      return null;
+    }
+    
+    // 创建临时画布，大小与原始图片一致
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = originalWidth;
+    tempCanvas.height = originalHeight;
+    const ctx = tempCanvas.getContext('2d');
+    
+    // 绘制原始图片到临时画布
+    const img = new Image();
+    img.src = dataUrl;
+    
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+    
+    // 绘制图片，保持原始尺寸
+    ctx.drawImage(img, 0, 0, originalWidth, originalHeight);
+    
+    // 应用水印设置
+    const wmType = document.querySelector('input[name="watermark-type"]:checked').value;
+    
+    // 计算水印的绝对位置（基于相对位置和原始图片尺寸）
+    const drawX = Math.round((watermarkRelativePos.x / 100) * originalWidth);
+    const drawY = Math.round((watermarkRelativePos.y / 100) * originalHeight);
+    
+    // 文本水印处理
+    if (wmType === "text" && watermarkText.value) {
+      // 设置透明度
+      ctx.globalAlpha = watermarkOpacity.value / 100;
+      
+      // 设置字体样式
+      let fontWeight = watermarkBold.checked ? "bold" : "normal";
+      let fontStyle = watermarkItalic.checked ? "italic" : "normal";
+      const fontSize = parseInt(watermarkFontSize.value);
+      const fontFamily = watermarkFont.value;
+      ctx.font = `${fontWeight} ${fontStyle} ${fontSize}px ${fontFamily}`;
+      
+      // 设置字体颜色
+      ctx.fillStyle = watermarkColor.value;
+      
+      // 测量文本宽度和高度
+      const textMetrics = ctx.measureText(watermarkText.value);
+      const textWidth = textMetrics.width;
+      const ascent = textMetrics.actualBoundingBoxAscent || fontSize * 0.8;
+      const descent = textMetrics.actualBoundingBoxDescent || fontSize * 0.2;
+      const totalTextHeight = ascent + descent;
+      
+      // 检查并修正水平边界
+      let adjustedDrawX = drawX;
+      if (adjustedDrawX < 0) adjustedDrawX = 0;
+      if (adjustedDrawX + textWidth > originalWidth) {
+        adjustedDrawX = originalWidth - textWidth;
+      }
+      
+      // 检查并修正垂直边界
+      let adjustedDrawY = drawY;
+      if (adjustedDrawY - ascent < 0) {
+        adjustedDrawY = ascent;
+      }
+      if (adjustedDrawY + descent > originalHeight) {
+        adjustedDrawY = originalHeight - descent;
+      }
+      
+      // 应用阴影效果
+      if (watermarkShadow.checked) {
+        ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
+        ctx.shadowBlur = 5;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
+      }
+      
+      // 应用描边效果
+      if (watermarkStroke.checked) {
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.8)";
+        ctx.lineWidth = 1;
+        ctx.strokeText(watermarkText.value, adjustedDrawX, adjustedDrawY);
+      }
+      
+      // 应用旋转
+      if (watermarkRotation !== 0) {
+        // 保存当前状态
+        ctx.save();
+        
+        // 计算旋转中心点（文本的中心点）
+        const centerX = adjustedDrawX + textWidth / 2;
+        const centerY = adjustedDrawY - ascent + totalTextHeight / 2;
+        
+        // 应用旋转变换
+        ctx.translate(centerX, centerY);
+        ctx.rotate((watermarkRotation * Math.PI) / 180);
+        ctx.translate(-centerX, -centerY);
+      }
+      
+      // 绘制文本水印
+      ctx.fillText(watermarkText.value, adjustedDrawX, adjustedDrawY);
+      
+      // 恢复状态
+      if (watermarkRotation !== 0) {
+        ctx.restore();
+      }
+      
+      // 重置阴影效果
+      if (watermarkShadow.checked) {
+        ctx.shadowColor = "transparent";
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+      }
+    }
+    
+    // 图片水印处理
+    else if (wmType === "image" && watermarkImagePath) {
+      // 获取水印图片
+      const watermarkImg = new Image();
+      watermarkImg.src = await window.ipcRenderer.getPreviewDataUrl(watermarkImagePath);
+      
+      await new Promise((resolve, reject) => {
+        watermarkImg.onload = resolve;
+        watermarkImg.onerror = reject;
+      });
+      
+      // 设置水印透明度
+      ctx.globalAlpha = watermarkImageOpacity.value / 100;
+      
+      // 计算水印图片的大小
+      const wmSize = parseInt(watermarkSize.value) / 100;
+      const wmWidth = Math.round(originalWidth * wmSize);
+      const wmHeight = Math.round((watermarkImg.height / watermarkImg.width) * wmWidth);
+      
+      // 计算水印的位置（居中于相对位置点）
+      let adjustedDrawX = drawX - wmWidth / 2;
+      let adjustedDrawY = drawY - wmHeight / 2;
+      
+      // 检查并修正边界
+      if (adjustedDrawX < 0) adjustedDrawX = 0;
+      if (adjustedDrawX + wmWidth > originalWidth) {
+        adjustedDrawX = originalWidth - wmWidth;
+      }
+      if (adjustedDrawY < 0) adjustedDrawY = 0;
+      if (adjustedDrawY + wmHeight > originalHeight) {
+        adjustedDrawY = originalHeight - wmHeight;
+      }
+      
+      // 应用旋转
+      if (watermarkRotation !== 0) {
+        ctx.save();
+        
+        // 计算旋转中心点
+        const centerX = adjustedDrawX + wmWidth / 2;
+        const centerY = adjustedDrawY + wmHeight / 2;
+        
+        // 应用旋转变换
+        ctx.translate(centerX, centerY);
+        ctx.rotate((watermarkRotation * Math.PI) / 180);
+        ctx.translate(-centerX, -centerY);
+      }
+      
+      // 绘制水印图片
+      ctx.drawImage(watermarkImg, adjustedDrawX, adjustedDrawY, wmWidth, wmHeight);
+      
+      // 恢复状态
+      if (watermarkRotation !== 0) {
+        ctx.restore();
+      }
+    }
+    
+    return tempCanvas;
+  } catch (err) {
+    console.error("创建带水印的画布失败:", err);
+    return null;
+  }
+}
+
+// ----------------------
+// 导出图片 (修改为批量导出所有图片，并去除黑边)
+// ----------------------
 exportBtn.addEventListener("click", async () => {
   if (!importedFiles.length) {
     showAlert("请导入图片！");
@@ -1292,108 +1502,79 @@ exportBtn.addEventListener("click", async () => {
     return;
   }
 
-  // 确保导出时水印位置的计算与预览时保持一致
-  // 如果有当前图片区域信息，需要调整水印位置以匹配原始图片尺寸
-  let exportWmPos = { ...watermarkRelativePos };
+  // 确保导出前保存当前设置
+  saveCurrentSettings();
 
-  // 检查是否存在当前图片区域信息
-  if (currentImageArea && importedFiles[currentImageIndex]) {
-    try {
-      // 获取原始图片的元数据
-      const metadata = await window.ipcRenderer.getImageMetadata(
-        importedFiles[currentImageIndex]
-      );
-
-      // 获取当前水印类型
-      const wmType = document.querySelector('input[name="watermark-type"]:checked').value;
-      
-      // 基础绝对位置计算
-      let x = Math.round((watermarkRelativePos.x / 100) * metadata.width);
-      let y = Math.round((watermarkRelativePos.y / 100) * metadata.height);
-      
-      if (wmType === "text" && watermarkText.value) {
-        // 获取字体大小并转换为与原始图片相匹配的尺寸
-        const fontSize = parseInt(watermarkFontSize.value || 40);
-        
-        // 计算预览图与原始图的比例
-        const previewToOriginalRatio = metadata.width / currentImageArea.width;
-        const scaledFontSize = Math.round(fontSize * previewToOriginalRatio);
-        
-        // 测量文本宽度（需要创建临时画布）
-        const tempCanvas = document.createElement('canvas');
-        const tempCtx = tempCanvas.getContext('2d');
-        let fontWeight = watermarkBold.checked ? 'bold' : 'normal';
-        let fontStyle = watermarkItalic.checked ? 'italic' : 'normal';
-        tempCtx.font = `${fontWeight} ${fontStyle} ${fontSize}px ${watermarkFont.value}`;
-        const textMetrics = tempCtx.measureText(watermarkText.value);
-        const textWidth = textMetrics.width * previewToOriginalRatio;
-        const textHeight = scaledFontSize;
-        
-        // 调整垂直位置以匹配预览中的视觉效果（考虑文本基线）
-        y += Math.round(scaledFontSize * 0.3); // 文本基线调整因子
-        
-        // 应用与预览完全相同的边界检查逻辑
-        // 检查并修正水平边界
-        if (x < 0) x = 0;
-        if (x + textWidth > metadata.width) {
-          x = metadata.width - textWidth;
-        }
-        
-        // 检查并修正垂直边界
-        if (y - textHeight < 0) y = textHeight;
-        if (y > metadata.height) y = metadata.height;
-      }
-
-      exportWmPos = {
-        x: x,
-        y: y,
-      };
-    } catch (err) {
-      console.error("计算导出水印位置时出错:", err);
-      // 出错时使用原始位置
-    }
-  }
-
+  // 获取导出参数
   const exportParams = {
     format: outputFormat.value,
     quality: outputFormat.value === ".jpg" ? parseInt(jpegQuality.value) : 100,
-    resize: parseInt(resizePercentage.value),
     prefix: filePrefix.value.trim(),
-    suffix: fileSuffix.value.trim(),
-    wmType: document.querySelector('input[name="watermark-type"]:checked')
-      .value,
-    wmText: watermarkText.value,
-    wmOpacity: watermarkOpacity.value,
-    wmImgPath: watermarkImagePath,
-    wmImgOpacity: watermarkImageOpacity.value,
-    wmSize: watermarkSize.value,
-    wmPos: exportWmPos,
-    // 添加水印相对位置，用于main.js中正确计算中心点
-    watermarkRelativePos: watermarkRelativePos,
-    // 新增文本水印样式设置
-    wmFont: watermarkFont?.value || "Arial",
-    wmFontSize: parseInt(watermarkFontSize?.value) || 40,
-    wmColor: watermarkColor?.value || "#ffffff",
-    wmBold: watermarkBold?.checked || false,
-    wmItalic: watermarkItalic?.checked || false,
-    wmShadow: watermarkShadow?.checked || false,
-    wmStroke: watermarkStroke?.checked || false,
+    suffix: fileSuffix.value.trim()
   };
 
   try {
     console.log(
-      "准备导出图片:",
+      "准备批量导出图片:",
       importedFiles.length,
       "张图片到目录:",
       outputDir
     );
     console.log("导出参数:", exportParams);
 
-    const results = await window.ipcRenderer.exportImages(
-      importedFiles,
-      outputDir,
-      exportParams
-    );
+    // 创建导出结果数组
+    const results = [];
+    
+    // 遍历所有导入的图片进行批量处理
+    for (let i = 0; i < importedFiles.length; i++) {
+      const currentFile = importedFiles[i];
+      console.log(`正在处理第 ${i + 1}/${importedFiles.length} 张图片:`, currentFile);
+      
+      // 为每张图片创建与原始尺寸一致的临时画布并应用水印
+      const tempCanvas = await createOriginalSizeCanvasWithWatermark(currentFile);
+      
+      if (tempCanvas) {
+        // 设置MIME类型
+        let mimeType = 'image/png';
+        if (exportParams.format === '.jpg' || exportParams.format === '.jpeg') {
+          mimeType = 'image/jpeg';
+        } else if (exportParams.format === '.webp') {
+          mimeType = 'image/webp';
+        }
+        
+        // 从临时画布获取图像数据
+        const canvasImageData = tempCanvas.toDataURL(mimeType, exportParams.quality / 100);
+        
+        // 生成文件名
+        const filename = path.basename(currentFile);
+        const baseName = filename.replace(/\.[^/.]+$/, "");
+        const prefix = exportParams.prefix ? exportParams.prefix + "_" : "";
+        const suffix = exportParams.suffix ? "_" + exportParams.suffix : "";
+        const outName = `${prefix}${baseName}${suffix}${exportParams.format}`;
+        
+        // 构建输出路径
+        const outPath = outputDir + '/' + outName;
+        
+        console.log(`准备导出图片到:`, outPath);
+        
+        // 保存图片
+        const success = await window.ipcRenderer.savePreviewImage(canvasImageData, outPath);
+        
+        results.push({
+          file: currentFile,
+          outPath: outPath,
+          success: success,
+          error: success ? null : "保存失败"
+        });
+      } else {
+        results.push({
+          file: currentFile,
+          outPath: null,
+          success: false,
+          error: "创建带水印的画布失败"
+        });
+      }
+    }
 
     console.log("导出结果:", results);
     // 检查是否所有图片都成功导出
@@ -1413,7 +1594,7 @@ exportBtn.addEventListener("click", async () => {
       showAlert(`导出完成！成功导出 ${successCount} 张图片`);
     }
   } catch (err) {
-    console.error("导出失败:", err);
+    console.error("批量导出失败:", err);
     showAlert(`导出失败，请查看控制台:\n${err.message || "未知错误"}`);
   }
 });
@@ -1451,12 +1632,25 @@ function saveImage(canvasEl, originalPath, exportParams) {
 }
 
 // ----------------------
+// 导出时使用的路径处理
+// ----------------------
+// 在渲染进程中使用简单的路径处理函数
+const path = {
+  join: function() {
+    return Array.prototype.join.call(arguments, '/');
+  },
+  basename: function(filePath) {
+    const parts = filePath.split(/[\\/]/);
+    return parts[parts.length - 1];
+  }
+};
+
+// ----------------------
 // 模板管理
 // ----------------------
-saveTemplateBtn.addEventListener("click", () => {
-  const name = templateNameInput.value.trim();
-  if (!name) return showAlert("请输入模板名称");
-  const template = {
+// 创建模板对象的函数
+function createTemplateObject() {
+  return {
     type: document.querySelector('input[name="watermark-type"]:checked').value,
     text: watermarkText.value,
     opacity: watermarkOpacity.value,
@@ -1464,8 +1658,38 @@ saveTemplateBtn.addEventListener("click", () => {
     imgOpacity: watermarkImageOpacity.value,
     imgSize: watermarkSize.value,
     pos: { ...watermarkRelativePos },
+    // 添加字体相关设置
+    font: watermarkFont.value,
+    fontSize: watermarkFontSize.value,
+    color: watermarkColor.value,
+    rotation: watermarkRotationSlider.value,
+    // 添加字体样式设置
+    bold: watermarkBold?.checked || false,
+    italic: watermarkItalic?.checked || false,
+    shadow: watermarkShadow?.checked || false,
+    stroke: watermarkStroke?.checked || false
   };
+}
+
+// 更新模板按钮事件监听器
+updateTemplateBtn.addEventListener("click", () => {
+  if (!selectedTemplate) return;
+  
+  const template = createTemplateObject();
+  window.ipcRenderer.saveTemplate(selectedTemplate, template);
+  showAlert(`模板已更新`);
+  loadTemplates();
+});
+
+// 另存为模板按钮事件监听器
+saveAsTemplateBtn.addEventListener("click", () => {
+  const name = templateNameInput.value.trim();
+  if (!name) return showAlert("请输入模板名称");
+  
+  const template = createTemplateObject();
   window.ipcRenderer.saveTemplate(name, template);
+  showAlert(`模板 "${name}" 已保存`);
+  templateNameInput.value = '';
   loadTemplates();
 });
 
@@ -1474,26 +1698,61 @@ function loadTemplates() {
     templatesList.innerHTML = "";
     if (!templates || Object.keys(templates).length === 0) {
       templatesList.innerHTML = "<p>无保存的模板</p>";
+      selectedTemplate = null;
+      updateTemplateButtonsState();
       return;
     }
     Object.entries(templates).forEach(([name, tpl]) => {
       const div = document.createElement("div");
-      div.className = "template-item";
+      div.className = `template-item ${selectedTemplate === name ? 'selected' : ''}`;
       div.innerHTML = `
         <span>${name}</span>
         <button data-name="${name}">删除</button>
       `;
       div.addEventListener("click", (e) => {
         if (e.target.tagName === "BUTTON") {
+          // 删除模板
           window.ipcRenderer.deleteTemplate(name);
+          if (selectedTemplate === name) {
+            selectedTemplate = null;
+            updateTemplateButtonsState();
+          }
           loadTemplates();
         } else {
-          applyTemplate(tpl);
+          // 切换模板选中状态
+          if (selectedTemplate === name) {
+            // 取消选中
+            selectedTemplate = null;
+            div.classList.remove('selected');
+          } else {
+            // 选中该模板
+            selectedTemplate = name;
+            // 移除其他模板的选中状态
+            document.querySelectorAll('.template-item').forEach(item => {
+              item.classList.remove('selected');
+            });
+            div.classList.add('selected');
+            applyTemplate(tpl);
+          }
+          updateTemplateButtonsState();
         }
       });
       templatesList.appendChild(div);
     });
   });
+}
+
+// 更新模板按钮的显示状态
+function updateTemplateButtonsState() {
+  if (selectedTemplate) {
+    updateTemplateBtn.style.display = 'inline-block';
+    saveAsTemplateBtn.style.display = 'inline-block';
+    templateNameInput.placeholder = '另存为新模板时输入名称';
+  } else {
+    updateTemplateBtn.style.display = 'none';
+    saveAsTemplateBtn.style.display = 'inline-block';
+    templateNameInput.placeholder = '模板名称';
+  }
 }
 
 function applyTemplate(tpl) {
@@ -1506,13 +1765,138 @@ function applyTemplate(tpl) {
   watermarkImagePath = tpl.imgPath || null;
   watermarkImageOpacity.value = tpl.imgOpacity || 50;
   watermarkSize.value = tpl.imgSize || 20;
+  
+  // 应用字体相关设置
+  if (tpl.font) watermarkFont.value = tpl.font;
+  if (tpl.fontSize) {
+    watermarkFontSize.value = tpl.fontSize;
+    fontSizeValue.textContent = tpl.fontSize;
+  }
+  if (tpl.color) watermarkColor.value = tpl.color;
+  if (tpl.rotation) {
+    watermarkRotationSlider.value = tpl.rotation;
+    watermarkRotationInput.value = tpl.rotation;
+    watermarkRotation = parseInt(tpl.rotation);
+  }
+  
+  // 应用字体样式设置
+  if (watermarkBold !== undefined) watermarkBold.checked = tpl.bold || false;
+  if (watermarkItalic !== undefined) watermarkItalic.checked = tpl.italic || false;
+  if (watermarkShadow !== undefined) watermarkShadow.checked = tpl.shadow || false;
+  if (watermarkStroke !== undefined) watermarkStroke.checked = tpl.stroke || false;
+  
   watermarkRelativePos = { ...tpl.pos } || { x: 50, y: 50, initiated: false };
-  drawPreview();
   watermarkTypeRadios.forEach((r) => r.dispatchEvent(new Event("change")));
+  drawPreview();
 }
 
 // 初始化
 loadTemplates();
+updateTemplateButtonsState();
+
+// 加载上次保存的设置
+async function loadLastSettings() {
+  try {
+    const settings = await window.ipcRenderer.getSettings();
+    applySettings(settings);
+  } catch (error) {
+    console.error('加载设置失败:', error);
+    // 加载失败时应用默认设置
+    const defaultTemplate = await window.ipcRenderer.getDefaultTemplate();
+    applySettings(defaultTemplate);
+  }
+}
+
+// 应用设置到UI
+function applySettings(settings) {
+  if (!settings) return;
+  
+  // 应用水印类型
+  if (settings.watermarkType) {
+    document.querySelector(`input[name="watermark-type"][value="${settings.watermarkType}"]`).checked = true;
+    // 触发类型切换事件
+    watermarkTypeRadios.forEach((r) => r.dispatchEvent(new Event("change")));
+  }
+  
+  // 应用文本水印设置
+  if (settings.watermarkText !== undefined) watermarkText.value = settings.watermarkText;
+  if (settings.watermarkOpacity !== undefined) {
+    watermarkOpacity.value = settings.watermarkOpacity;
+    opacityValue.textContent = settings.watermarkOpacity;
+  }
+  
+  // 应用图片水印设置
+  if (settings.watermarkImageOpacity !== undefined) {
+    watermarkImageOpacity.value = settings.watermarkImageOpacity;
+    imageOpacityValue.textContent = settings.watermarkImageOpacity;
+  }
+  if (settings.watermarkSize !== undefined) {
+    watermarkSize.value = settings.watermarkSize;
+    sizeValue.textContent = settings.watermarkSize;
+  }
+  
+  // 应用文本样式设置
+  if (settings.watermarkFont !== undefined) watermarkFont.value = settings.watermarkFont;
+  if (settings.watermarkFontSize !== undefined) {
+    watermarkFontSize.value = settings.watermarkFontSize;
+    fontSizeValue.textContent = settings.watermarkFontSize;
+  }
+  if (settings.watermarkColor !== undefined) watermarkColor.value = settings.watermarkColor;
+  if (settings.watermarkRotation !== undefined) {
+    if (watermarkRotationSlider) watermarkRotationSlider.value = settings.watermarkRotation;
+    if (watermarkRotationInput) watermarkRotationInput.value = settings.watermarkRotation;
+  }
+  
+  // 应用字体样式设置
+  if (settings.watermarkBold !== undefined && watermarkBold) {
+    watermarkBold.checked = settings.watermarkBold;
+  }
+  if (settings.watermarkItalic !== undefined && watermarkItalic) {
+    watermarkItalic.checked = settings.watermarkItalic;
+  }
+  if (settings.watermarkShadow !== undefined && watermarkShadow) {
+    watermarkShadow.checked = settings.watermarkShadow;
+  }
+  if (settings.watermarkStroke !== undefined && watermarkStroke) {
+    watermarkStroke.checked = settings.watermarkStroke;
+  }
+  
+  // 应用水印位置
+  if (settings.watermarkPos) {
+    watermarkRelativePos = { ...settings.watermarkPos };
+  }
+  
+  // 重新绘制预览
+  drawPreview();
+}
+
+// 保存当前设置
+function saveCurrentSettings() {
+  const settings = {
+    watermarkType: document.querySelector('input[name="watermark-type"]:checked').value,
+    watermarkText: watermarkText.value,
+    watermarkOpacity: watermarkOpacity.value,
+    watermarkImageOpacity: watermarkImageOpacity.value,
+    watermarkSize: watermarkSize.value,
+    watermarkFont: watermarkFont.value,
+    watermarkFontSize: watermarkFontSize.value,
+    watermarkColor: watermarkColor.value,
+    watermarkRotation: watermarkRotationSlider?.value || 0,
+    watermarkPos: { ...watermarkRelativePos },
+    // 添加字体样式设置
+    watermarkBold: watermarkBold?.checked || false,
+    watermarkItalic: watermarkItalic?.checked || false,
+    watermarkShadow: watermarkShadow?.checked || false,
+    watermarkStroke: watermarkStroke?.checked || false
+  };
+  
+  window.ipcRenderer.saveSettings(settings).catch((error) => {
+    console.error('保存设置失败:', error);
+  });
+}
+
+// 加载上次的设置
+loadLastSettings();
 
 // 添加窗口大小变化事件监听器，使图片自适应窗口大小
 window.addEventListener("resize", () => {
@@ -1533,5 +1917,40 @@ watermarkTypeRadios.forEach((radio) => {
       imageSettings.style.display = "block";
     }
     drawPreview();
+    // 保存设置
+    saveCurrentSettings();
   });
+});
+
+// 为所有设置控件添加事件监听器，当值变化时自动保存
+const settingControls = [
+  watermarkText,
+  watermarkOpacity,
+  watermarkImageOpacity,
+  watermarkSize,
+  watermarkFont,
+  watermarkFontSize,
+  watermarkColor,
+  watermarkRotationSlider,
+  watermarkRotationInput
+];
+
+// 为输入控件添加事件监听器
+settingControls.forEach(control => {
+  if (!control) return;
+  
+  if (control.type === 'checkbox' || control.type === 'radio') {
+    control.addEventListener('change', saveCurrentSettings);
+  } else {
+    control.addEventListener('input', saveCurrentSettings);
+    control.addEventListener('change', saveCurrentSettings);
+  }
+});
+
+// 监听水印拖拽结束事件，保存位置设置
+document.addEventListener('mouseup', function() {
+  // 当拖拽结束后保存水印位置
+  if (isDragging) {
+    setTimeout(saveCurrentSettings, 100); // 延迟保存，确保位置已更新
+  }
 });

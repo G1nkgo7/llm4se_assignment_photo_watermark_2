@@ -9,7 +9,81 @@ const fs = require("fs");
 const sharp = require("sharp"); // 确保已安装
 const Jimp = require("jimp");
 
-let templates = {}; // 模板存储
+// 定义模板和设置存储文件路径
+const TEMPLATES_FILE = path.join(app.getPath('userData'), 'templates.json');
+const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
+
+// 初始化模板对象
+let templates = {};
+let lastSettings = {};
+
+// 默认设置
+const DEFAULT_SETTINGS = {
+  watermarkType: 'text',
+  watermarkText: 'Watermark',
+  watermarkOpacity: '50',
+  watermarkImageOpacity: '50',
+  watermarkSize: '20',
+  watermarkFont: 'Arial',
+  watermarkFontSize: '40',
+  watermarkColor: '#ffffff',
+  watermarkRotation: '0',
+  watermarkPos: { x: 50, y: 50, initiated: false }
+};
+
+// 从文件加载模板
+function loadTemplatesFromFile() {
+  try {
+    if (fs.existsSync(TEMPLATES_FILE)) {
+      const data = fs.readFileSync(TEMPLATES_FILE, 'utf8');
+      templates = JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('加载模板失败:', err);
+    templates = {};
+  }
+}
+
+// 保存模板到文件
+function saveTemplatesToFile() {
+  try {
+    // 确保目录存在
+    const dir = path.dirname(TEMPLATES_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(TEMPLATES_FILE, JSON.stringify(templates, null, 2));
+  } catch (err) {
+    console.error('保存模板失败:', err);
+  }
+}
+
+// 从文件加载设置
+function loadSettingsFromFile() {
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
+      lastSettings = JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('加载设置失败:', err);
+    lastSettings = {};
+  }
+}
+
+// 保存设置到文件
+function saveSettingsToFile(settings) {
+  try {
+    // 确保目录存在
+    const dir = path.dirname(SETTINGS_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  } catch (err) {
+    console.error('保存设置失败:', err);
+  }
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -261,7 +335,10 @@ ipcMain.handle("export-images", async (event, files, outputDir, params) => {
         // 注：这里简化处理，实际项目中可能需要根据文本的实际尺寸进行更精确的计算
         // 为了与预览拖拽逻辑保持一致，我们添加了与图片水印类似的边缘处理注释
 
-        // 创建文本元素的属性
+        // 获取旋转角度（默认为0）
+        const rotation = parseInt(params.wmRotation) || 0;
+        
+        // 创建文本元素的属性，添加旋转支持
         let textAttrs = `
           x="${centerAbsX}"
           y="${centerAbsY}"
@@ -273,6 +350,11 @@ ipcMain.handle("export-images", async (event, files, outputDir, params) => {
           opacity="${params.wmOpacity / 100}"
           text-anchor="middle"
           dominant-baseline="middle"`;
+        
+        // 如果有旋转角度，添加transform属性
+        if (rotation !== 0) {
+          textAttrs += `\n          transform="rotate(${rotation} ${centerAbsX} ${centerAbsY})"`;
+        }
 
         // 构建SVG内容
         let svgContent = `<svg width="${finalWidth}" height="${finalHeight}">`;
@@ -325,6 +407,8 @@ ipcMain.handle("export-images", async (event, files, outputDir, params) => {
         try {
           // 获取水印相对位置
           const watermarkRelPos = params.watermarkRelativePos;
+          // 获取旋转角度
+          const rotation = parseInt(params.wmRotation) || 0;
 
           // 【修正点】根据最终图片宽度和百分比计算水印宽度
           const watermarkSizePercentage = params.wmSize;
@@ -334,6 +418,14 @@ ipcMain.handle("export-images", async (event, files, outputDir, params) => {
 
           // 准备水印图层：加载水印图片并缩放到计算出的像素宽度
           let watermarkImage = sharp(params.wmImgPath).resize(wmWidth, null);
+
+          // 如果有旋转角度，应用旋转变换
+          if (rotation !== 0) {
+            // 使用sharp的rotate方法应用旋转
+            watermarkImage = watermarkImage.rotate(rotation, {
+              background: { r: 0, g: 0, b: 0, alpha: 0 } // 透明背景
+            });
+          }
 
           // 获取水印图层缩放后的实际尺寸
           const wmMetadata = await watermarkImage.metadata();
@@ -345,14 +437,19 @@ ipcMain.handle("export-images", async (event, files, outputDir, params) => {
 
           // 确保与预览拖拽逻辑完全一致
           // 根据相对位置直接计算左上角坐标 - 与renderer.js中的calculateWatermarkPosition函数保持一致
-          const left = Math.round((watermarkRelPos.x / 100) * finalWidth);
-          const top = Math.round((watermarkRelPos.y / 100) * finalHeight);
+          // 注意：对于旋转后的图片，需要计算旋转后的中心点位置
+          const centerX = Math.round((watermarkRelPos.x / 100) * finalWidth);
+          const centerY = Math.round((watermarkRelPos.y / 100) * finalHeight);
+          
+          // 计算左上角坐标
+          let adjustedLeft = centerX - scaledWidth / 2;
+          let adjustedTop = centerY - scaledHeight / 2;
 
           // 改进边缘校正逻辑，确保水印不超出图片边界
           // 与renderer.js中的拖拽边界逻辑保持一致
           // 第一步：确保左上角坐标不小于0
-          let adjustedLeft = Math.max(0, left);
-          let adjustedTop = Math.max(0, top);
+          adjustedLeft = Math.max(0, adjustedLeft);
+          adjustedTop = Math.max(0, adjustedTop);
 
           // 第二步：确保水印不会超出右边缘和下边缘
           // 与renderer.js中的拖拽边界逻辑完全匹配，使用-1允许水印几乎到达边缘
@@ -437,6 +534,36 @@ ipcMain.handle("export-images", async (event, files, outputDir, params) => {
 });
 
 // ----------------------
+// 保存预览图片 (直接从预览画布导出)
+// ----------------------
+ipcMain.handle(
+  "save-preview-image",
+  async (event, imageData, savePath) => {
+    try {
+      // 移除data URL前缀
+      const base64Data = imageData.replace(/^data:image\/\w+;base64,/, "");
+      
+      // 解码base64数据
+      const buffer = Buffer.from(base64Data, "base64");
+      
+      // 确保目录存在
+      const dir = path.dirname(savePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      
+      // 写入文件
+      fs.writeFileSync(savePath, buffer);
+      console.log("预览图片保存成功:", savePath);
+      return true;
+    } catch (error) {
+      console.error("保存预览图片失败:", error);
+      return false;
+    }
+  }
+);
+
+// ----------------------
 // 保存图片
 // ----------------------
 ipcMain.handle(
@@ -483,6 +610,7 @@ ipcMain.handle(
 // ----------------------
 ipcMain.handle("save-template", (event, name, template) => {
   templates[name] = template;
+  saveTemplatesToFile(); // 保存到文件
   return true;
 });
 
@@ -492,11 +620,33 @@ ipcMain.handle("get-templates", () => {
 
 ipcMain.handle("delete-template", (event, name) => {
   delete templates[name];
+  saveTemplatesToFile(); // 保存到文件
   return true;
+});
+
+// 添加设置相关的IPC处理器
+ipcMain.handle('save-settings', (event, settings) => {
+  lastSettings = settings;
+  saveSettingsToFile(settings);
+  return true;
+});
+
+ipcMain.handle('get-settings', () => {
+  // 如果没有上次的设置，返回默认设置
+  if (Object.keys(lastSettings).length === 0) {
+    return DEFAULT_SETTINGS;
+  }
+  return lastSettings;
+});
+
+ipcMain.handle('get-default-template', () => {
+  return DEFAULT_SETTINGS;
 });
 
 // ----------------------
 app.whenReady().then(() => {
+  loadTemplatesFromFile(); // 应用启动时加载模板
+  loadSettingsFromFile(); // 应用启动时加载设置
   createWindow();
   app.on("activate", function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
