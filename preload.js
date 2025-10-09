@@ -17,4 +17,5 @@ contextBridge.exposeInMainWorld("ipcRenderer", {
   getPreviewDataUrl: (filePath) =>
     ipcRenderer.invoke("get-preview-data-url", filePath),
   getDirPath: (filePath) => ipcRenderer.invoke("get-dir-path", filePath),
-});
+  getImageMetadata: (filePath) => ipcRenderer.invoke("get-image-metadata", filePath),
+  });

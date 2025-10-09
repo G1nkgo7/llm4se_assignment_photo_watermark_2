@@ -52,10 +52,6 @@
                 />
                 文本水印</label
               >
-              <label
-                ><input type="radio" name="watermark-type" value="image" />
-                图片水印</label
-              >
             </div>
           </div>
 
@@ -68,6 +64,56 @@
               placeholder="请输入水印文本"
             />
 
+            <label for="watermark-font">字体</label>
+            <select id="watermark-font">
+              <option value="Arial">Arial</option>
+              <option value="Helvetica">Helvetica</option>
+              <option value="Times New Roman">Times New Roman</option>
+              <option value="Georgia">Georgia</option>
+              <option value="Courier New">Courier New</option>
+              <option value="Verdana">Verdana</option>
+              <option value="Impact">Impact</option>
+            </select>
+
+            <label for="watermark-font-size">字体大小 (px)</label>
+            <input
+              type="range"
+              id="watermark-font-size"
+              min="12"
+              max="120"
+              value="40"
+            />
+            <span id="font-size-value">40</span>
+
+            <label for="watermark-color">字体颜色</label>
+            <input
+              type="color"
+              id="watermark-color"
+              value="#ffffff"
+            />
+
+            <div class="checkbox-group">
+              <label>
+                <input type="checkbox" id="watermark-bold" />
+                粗体
+              </label>
+              <label>
+                <input type="checkbox" id="watermark-italic" />
+                斜体
+              </label>
+            </div>
+
+            <div class="checkbox-group">
+              <label>
+                <input type="checkbox" id="watermark-shadow" />
+                阴影
+              </label>
+              <label>
+                <input type="checkbox" id="watermark-stroke" />
+                描边
+              </label>
+            </div>
+
             <label for="watermark-opacity">透明度 (0-100)</label>
             <input
               type="range"
@@ -77,6 +123,23 @@
               value="100"
             />
             <span id="opacity-value">100</span>
+            
+            <label for="watermark-rotation">旋转角度 (0-359°)</label>
+            <input
+              type="range"
+              id="watermark-rotation"
+              min="0"
+              max="359"
+              value="0"
+            />
+            <input
+              type="number"
+              id="watermark-rotation-input"
+              min="0"
+              max="359"
+              value="0"
+              style="width: 60px; margin-left: 10px;"
+            />
           </div>
 
           <!-- 图片水印设置 -->
@@ -107,17 +170,34 @@
             <span id="image-opacity-value">50</span>
           </div>
 
+          <!-- 水印预设位置 -->
+          <h3>预设位置</h3>
+          <div class="setting-group">
+            <div id="position-presets" class="position-presets">
+              <button class="preset-btn" data-position="0,0">左上角</button>
+              <button class="preset-btn" data-position="50,0">上中</button>
+              <button class="preset-btn" data-position="100,0">右上角</button>
+              <button class="preset-btn" data-position="0,50">左中</button>
+              <button class="preset-btn" data-position="50,50">正中心</button>
+              <button class="preset-btn" data-position="100,50">右中</button>
+              <button class="preset-btn" data-position="0,100">左下角</button>
+              <button class="preset-btn" data-position="50,100">下中</button>
+              <button class="preset-btn" data-position="100,100">右下角</button>
+            </div>
+          </div>
+
           <h3>导出设置</h3>
           <div class="setting-group">
             <button id="select-output-btn" class="btn-secondary">
               选择输出目录
             </button>
-            <p id="output-dir" class="file-path"></p>
+              <p id="output-dir" class="file-path"></p>
 
             <label for="output-format">输出格式</label>
             <select id="output-format">
               <option value=".jpg">JPEG</option>
               <option value=".png">PNG</option>
+              <option value=".bmp">BMP</option>
             </select>
             <div id="jpeg-quality-settings" class="setting-group-sub">
               <label for="jpeg-quality">JPEG 质量 (1-100)</label>

@@ -7,6 +7,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp"); // 确保已安装
+const Jimp = require("jimp");
 
 let templates = {}; // 模板存储
 
@@ -31,37 +32,49 @@ ipcMain.handle("get-dir-path", (event, filePath) => {
   return path.dirname(filePath);
 });
 
-ipcMain.handle("get-preview-data-url", async (event, filePath) => {
-  // 检查是否为Tiff，如果不是，可以直接返回原始路径或进行简单读取
-  if (
-    !filePath.toLowerCase().endsWith(".tiff") &&
-    !filePath.toLowerCase().endsWith(".tif")
-  ) {
-    // 对于原生支持的图片，可以直接返回数据URL
-    try {
-      const data = fs.readFileSync(filePath).toString("base64");
-      const mimeType =
-        path.extname(filePath).toLowerCase() === ".png"
-          ? "image/png"
-          : "image/jpeg"; // 简化处理
-      return `data:${mimeType};base64,${data}`;
-    } catch (e) {
-      console.error("读取原生图片失败:", e);
-      return null;
-    }
-  }
-
-  // Tiff 转换
+// 获取图片元数据
+ipcMain.handle("get-image-metadata", async (event, filePath) => {
   try {
+    const metadata = await sharp(filePath).metadata();
+    return metadata;
+  } catch (err) {
+    console.error("获取图片元数据失败:", err);
+    // 对于BMP等可能不被sharp完全支持的格式，返回基本信息
+    const stats = fs.statSync(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    return {
+      format: ext.substring(1), // 返回文件扩展名（不带点）
+      size: stats.size, // 文件大小（字节）
+      width: 0, // 未知宽度
+      height: 0, // 未知高度
+    };
+    // 不再抛出错误，而是返回基本信息，确保图片能正常导入
+  }
+});
+
+ipcMain.handle("get-preview-data-url", async (event, filePath) => {
+  try {
+    // 使用sharp库处理所有图片格式，包括BMP
     const buffer = await sharp(filePath)
-      .resize(800) // 可选：限制预览尺寸以优化性能
-      .png() // 转换为 PNG 格式
+      .resize(800) // 限制预览尺寸以优化性能
+      .png() // 转换为PNG格式进行预览
       .toBuffer();
     const base64 = buffer.toString("base64");
     return `data:image/png;base64,${base64}`;
   } catch (err) {
-    console.error("Tiff 转换失败:", err);
-    return null;
+    console.error("图片处理失败:", err);
+    // 如果sharp处理失败，尝试直接读取（针对简单格式）
+    try {
+      const data = fs.readFileSync(filePath).toString("base64");
+      const ext = path.extname(filePath).toLowerCase();
+      let mimeType = "image/jpeg";
+      if (ext === ".png") mimeType = "image/png";
+      if (ext === ".bmp") mimeType = "image/bmp";
+      return `data:${mimeType};base64,${data}`;
+    } catch (e) {
+      console.error("直接读取图片也失败:", e);
+      return null;
+    }
   }
 });
 
@@ -71,9 +84,7 @@ ipcMain.handle("get-preview-data-url", async (event, filePath) => {
 ipcMain.handle("select-images", async () => {
   const result = await dialog.showOpenDialog({
     properties: ["openFile", "multiSelections"],
-    filters: [
-      { name: "Images", extensions: ["jpg", "jpeg", "png", "bmp", "tiff"] },
-    ],
+    filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "tiff"] }],
   });
   return result.canceled ? [] : result.filePaths;
 });
@@ -94,7 +105,7 @@ ipcMain.handle("select-folder", async () => {
   }
 
   const folderPath = result.filePaths[0];
-  const validImageExtensions = [".jpg", ".jpeg", ".png", ".bmp", ".tiff"];
+  const validImageExtensions = [".jpg", ".jpeg", ".png", ".tiff"];
   const imageFiles = [];
 
   function processDir(dir) {
@@ -119,7 +130,7 @@ ipcMain.handle("select-folder", async () => {
 });
 
 ipcMain.handle("select-folder-for-path", async (event, folderPath) => {
-  const validExt = [".jpg", ".jpeg", ".png", ".bmp", ".tiff"];
+  const validExt = [".jpg", ".jpeg", ".png", ".tiff"];
   const imageFiles = [];
 
   function processDir(dir) {
@@ -139,7 +150,7 @@ ipcMain.handle("select-folder-for-path", async (event, folderPath) => {
 
 // 拖拽文件夹递归读取图片
 ipcMain.handle("read-folder-images", async (event, folderPath) => {
-  const validExt = [".jpg", ".jpeg", ".png", ".bmp", ".tiff"];
+  const validExt = [".jpg", ".jpeg", ".png", ".tiff"];
   const imageFiles = [];
 
   function readDir(dir) {
@@ -182,82 +193,248 @@ ipcMain.handle("export-images", async (event, files, outputDir, params) => {
   const results = [];
   for (const file of files) {
     try {
-      let image = sharp(file);
+      let image;
+      try {
+        // 尝试直接用 sharp 打开
+        image = sharp(file);
+        await image.metadata(); // 验证文件格式是否可读
+      } catch (err) {
+        // 如果是 BMP 文件且 sharp 无法读取，则自动转为 PNG 再继续
+        if (path.extname(file).toLowerCase() === ".bmp") {
+          console.warn("检测到不支持的 BMP，使用 Jimp 转换：", file);
+          const tempPath = file + ".tmp.png";
+          try {
+            const bmp = await Jimp.read(file);
+            await bmp.writeAsync(tempPath);
+            image = sharp(tempPath);
+          } catch (e) {
+            console.error("Jimp 转换 BMP 失败:", e);
+            throw e;
+          } finally {
+            // ✅ 延迟删除临时文件，确保文件被 Sharp 打开后再清理
+            setTimeout(() => {
+              fs.unlink(tempPath, (err) => {
+                if (err)
+                  console.warn("删除临时文件失败:", tempPath, err.message);
+                else console.log("已删除临时文件:", tempPath);
+              });
+            }, 3000); // 给 Sharp 一点时间读取完成
+          }
+        } else {
+          throw err; // 其他类型错误照常处理
+        }
+      }
 
       // 获取元数据（宽高等）
       const metadata = await image.metadata();
+      let finalWidth = metadata.width;
+      let finalHeight = metadata.height;
 
       // 缩放
       if (params.resize && params.resize !== 100) {
         image = image.resize({
           width: Math.round((metadata.width * params.resize) / 100),
         });
+        // 重新获取缩放后的元数据
+        const resizedMetadata = await image.metadata();
+        finalWidth = resizedMetadata.width;
+        finalHeight = resizedMetadata.height;
       }
 
       // 文字水印
       if (params.wmType === "text" && params.wmText) {
-        const svg = `
-          <svg width="${metadata.width}" height="${metadata.height}">
-            <text x="${params.wmPos.x}" y="${params.wmPos.y}"
-              font-size="40" font-family="sans-serif" fill="#ffffff" opacity="${params.wmOpacity / 100}">
+        // 设置字体样式
+        let fontWeight = params.wmBold ? "bold" : "normal";
+        let fontStyle = params.wmItalic ? "italic" : "normal";
+        let fontSize = params.wmFontSize || 40;
+        let fontFamily = params.wmFont || "sans-serif";
+
+        // 获取水印相对位置
+        const watermarkRelPos = params.watermarkRelativePos;
+
+        // 计算绝对中心点坐标 - 与renderer.js中的calculateWatermarkPosition函数保持一致
+        let centerAbsX = Math.round((watermarkRelPos.x / 100) * finalWidth);
+        let centerAbsY = Math.round((watermarkRelPos.y / 100) * finalHeight);
+
+        // 对于文本水印，我们也需要确保它不会超出图片边界
+        // 但由于文本水印是基于中心点定位的，我们需要进行特殊处理
+        // 注：这里简化处理，实际项目中可能需要根据文本的实际尺寸进行更精确的计算
+        // 为了与预览拖拽逻辑保持一致，我们添加了与图片水印类似的边缘处理注释
+
+        // 创建文本元素的属性
+        let textAttrs = `
+          x="${centerAbsX}"
+          y="${centerAbsY}"
+          font-size="${fontSize}"
+          font-family="${fontFamily}"
+          font-weight="${fontWeight}"
+          font-style="${fontStyle}"
+          fill="${params.wmColor || "#ffffff"}"
+          opacity="${params.wmOpacity / 100}"
+          text-anchor="middle"
+          dominant-baseline="middle"`;
+
+        // 构建SVG内容
+        let svgContent = `<svg width="${finalWidth}" height="${finalHeight}">`;
+
+        // 如果需要描边效果，先添加描边的文本
+        if (params.wmStroke) {
+          // 为描边文本创建不带fill的属性
+          const strokeAttrs = textAttrs.replace(/fill="[^"]*"\s*/, "");
+          svgContent += `
+            <text${strokeAttrs}
+              fill="none"
+              stroke="rgba(0, 0, 0, 0.7)"
+              stroke-width="1">
               ${params.wmText}
-            </text>
-          </svg>`;
-        image = image.composite([{ input: Buffer.from(svg) }]);
+            </text>`;
+        }
+
+        // 添加填充的文本（带或不带阴影）
+        if (params.wmShadow) {
+          svgContent += `
+            <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
+              <feOffset dx="2" dy="2" result="offsetblur"/>
+              <feComponentTransfer>
+                <feFuncA type="linear" slope="0.5"/>
+              </feComponentTransfer>
+              <feMerge>
+                <feMergeNode/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>`;
+          svgContent += `
+            <text${textAttrs} filter="url(#dropShadow)">
+              ${params.wmText}
+            </text>`;
+        } else {
+          svgContent += `
+            <text${textAttrs}>
+              ${params.wmText}
+            </text>`;
+        }
+
+        svgContent += "</svg>";
+
+        image = image.composite([{ input: Buffer.from(svgContent) }]);
       }
 
       // 图片水印
       if (params.wmType === "image" && params.wmImgPath) {
         try {
-          // 获取水印图片的元数据
-          const wmMetadata = await sharp(params.wmImgPath).metadata();
-          // 计算水印图片的缩放后的尺寸
-          const scale = params.wmSize / 100;
-          const scaledWidth = Math.round(wmMetadata.width * scale);
-          const scaledHeight = Math.round(wmMetadata.height * scale);
-          
-          // 调整水印图片大小并应用透明度
-          const wm = await sharp(params.wmImgPath)
-            .resize({ width: scaledWidth, height: scaledHeight })
-            .png()
-            .toBuffer();
-            
-          // 创建一个临时的SVG来应用透明度
-          const svgWithOpacity = `
-            <svg width="${metadata.width}" height="${metadata.height}">
-              <image x="${params.wmPos.x}" y="${params.wmPos.y}" 
-                width="${scaledWidth}" height="${scaledHeight}" 
-                href="data:image/png;base64,${wm.toString('base64')}" 
-                opacity="${params.wmImgOpacity / 100}"/>
-            </svg>`;
-          
-          image = image.composite([{ input: Buffer.from(svgWithOpacity) }]);
+          // 获取水印相对位置
+          const watermarkRelPos = params.watermarkRelativePos;
+
+          // 【修正点】根据最终图片宽度和百分比计算水印宽度
+          const watermarkSizePercentage = params.wmSize;
+          const wmWidth = Math.round(
+            finalWidth * (watermarkSizePercentage / 100)
+          );
+
+          // 准备水印图层：加载水印图片并缩放到计算出的像素宽度
+          let watermarkImage = sharp(params.wmImgPath).resize(wmWidth, null);
+
+          // 获取水印图层缩放后的实际尺寸
+          const wmMetadata = await watermarkImage.metadata();
+          const scaledWidth = wmMetadata.width;
+          const scaledHeight = wmMetadata.height;
+
+          // 调整水印图片大小并转换为Buffer
+          const wm = await watermarkImage.png().toBuffer();
+
+          // 确保与预览拖拽逻辑完全一致
+          // 根据相对位置直接计算左上角坐标 - 与renderer.js中的calculateWatermarkPosition函数保持一致
+          const left = Math.round((watermarkRelPos.x / 100) * finalWidth);
+          const top = Math.round((watermarkRelPos.y / 100) * finalHeight);
+
+          // 改进边缘校正逻辑，确保水印不超出图片边界
+          // 与renderer.js中的拖拽边界逻辑保持一致
+          // 第一步：确保左上角坐标不小于0
+          let adjustedLeft = Math.max(0, left);
+          let adjustedTop = Math.max(0, top);
+
+          // 第二步：确保水印不会超出右边缘和下边缘
+          // 与renderer.js中的拖拽边界逻辑完全匹配，使用-1允许水印几乎到达边缘
+          if (adjustedLeft + scaledWidth > finalWidth) {
+            adjustedLeft = finalWidth - scaledWidth - 1;
+          }
+          if (adjustedTop + scaledHeight > finalHeight) {
+            adjustedTop = finalHeight - scaledHeight - 1;
+          }
+
+          // 第三步：最后再次确保不小于0，防止极端情况下出现负值
+          adjustedLeft = Math.max(0, adjustedLeft);
+          adjustedTop = Math.max(0, adjustedTop);
+
+          // 使用Sharp的composite直接应用水印，而不是通过SVG
+          image = image.composite([
+            {
+              input: wm,
+              left: adjustedLeft,
+              top: adjustedTop,
+              // 确保应用透明度
+              opacity: params.wmImgOpacity / 100,
+            },
+          ]);
         } catch (err) {
-          console.error('处理水印图片时出错:', err);
+          console.error("处理水印图片时出错:", err);
         }
       }
 
       // 输出文件名
-      const filename = path.basename(file, path.extname(file));
-      const outName = `${params.prefix ? params.prefix + "_" : ""}${filename}${
-        params.suffix ? "_" + params.suffix : ""
-      }${params.format}`;
-      const outPath = path.join(outputDir, outName);
+      console.log("处理文件:", file);
+      console.log("水印类型:", params.wmType);
 
-      if (params.format === ".jpg") {
-        await image.jpeg({ quality: params.quality }).toFile(outPath);
-      } else {
-        await image.toFile(outPath);
+      // 如果当前是 BMP 转换生成的临时 PNG，去掉 ".tmp.png"
+      let originalFilePath = file;
+      if (file.endsWith(".tmp.png")) {
+        originalFilePath = file.replace(/\.tmp\.png$/, "");
       }
 
-      results.push({ file, outPath, success: true });
+      // 获取原始文件名（去掉扩展名）
+      const filename = path.basename(
+        originalFilePath,
+        path.extname(originalFilePath)
+      );
+
+      // 确定输出格式（加上点号）
+      let format = params.format || "";
+      if (format && !format.startsWith(".")) format = "." + format;
+
+      // 生成输出文件名
+      const outName = `${params.prefix ? params.prefix + "_" : ""}${filename}${
+        params.suffix ? "_" + params.suffix : ""
+      }${format}`;
+
+      // 拼接输出路径
+      const outPath = path.join(outputDir, outName);
+
+      console.log("输出路径:", outPath);
+
+      try {
+        if (params.format === ".jpg") {
+          await image.jpeg({ quality: params.quality }).toFile(outPath);
+        } else {
+          await image.toFile(outPath);
+        }
+        console.log("文件保存成功:", outPath);
+        results.push({ file, outPath, success: true });
+      } catch (saveError) {
+        console.error("文件保存失败:", outPath, "错误:", saveError);
+        results.push({
+          file,
+          outPath,
+          error: saveError.message,
+          success: false,
+        });
+      }
     } catch (err) {
       results.push({ file, error: err.message, success: false });
     }
   }
   return results;
 });
-
 
 // ----------------------
 // 保存图片
